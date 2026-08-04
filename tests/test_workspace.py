@@ -3,7 +3,12 @@ import pytest
 from resolve_time_tracker.config import Config
 from resolve_time_tracker.store import Store
 from resolve_time_tracker.toggl import TogglError
-from resolve_time_tracker.workspace import resolve_workspace_id
+from resolve_time_tracker.workspace import (
+    DEFAULT_PROJECT_META_KEY,
+    DEFAULT_PROJECT_NAME,
+    resolve_default_project_id,
+    resolve_workspace_id,
+)
 
 
 class FakeToggl:
@@ -58,3 +63,45 @@ def test_no_workspaces_raise(store):
 
     with pytest.raises(TogglError):
         resolve_workspace_id(store, client, Config())
+
+
+class FakeTogglProjects:
+    def __init__(self, projects):
+        self._projects = projects
+        self.created: list[dict] = []
+
+    def projects(self, workspace_id):
+        return self._projects
+
+    def create_project(self, workspace_id, name):
+        project = {"id": 999, "name": name}
+        self.created.append(project)
+        return project
+
+
+def test_default_project_id_is_cached_after_first_resolution(store):
+    store.set_meta(DEFAULT_PROJECT_META_KEY, "555")
+    client = FakeTogglProjects([])  # sollte gar nicht angefragt werden
+
+    assert resolve_default_project_id(store, client, workspace_id=111) == 555
+    assert client.created == []
+
+
+def test_default_project_id_is_found_by_exact_name_and_cached(store):
+    client = FakeTogglProjects(
+        [{"id": 111, "name": "Anderes Projekt"}, {"id": 222, "name": DEFAULT_PROJECT_NAME}]
+    )
+
+    assert resolve_default_project_id(store, client, workspace_id=111) == 222
+    assert store.get_meta(DEFAULT_PROJECT_META_KEY) == "222"
+    assert client.created == []
+
+
+def test_default_project_id_is_created_when_missing(store):
+    client = FakeTogglProjects([{"id": 111, "name": "Anderes Projekt"}])
+
+    project_id = resolve_default_project_id(store, client, workspace_id=111)
+
+    assert project_id == 999
+    assert client.created == [{"id": 999, "name": DEFAULT_PROJECT_NAME}]
+    assert store.get_meta(DEFAULT_PROJECT_META_KEY) == "999"

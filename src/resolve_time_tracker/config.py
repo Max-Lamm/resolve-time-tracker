@@ -59,6 +59,10 @@ def log_path() -> Path:
     return Path.home() / "Library" / "Logs" / "resolve-time-tracker.log"
 
 
+def lock_path() -> Path:
+    return Path.home() / "Library" / "Application Support" / "resolve-time-tracker" / "tracker.lock"
+
+
 def load_config(path: Path | None = None) -> Config:
     path = path or config_path()
     if not path.exists():

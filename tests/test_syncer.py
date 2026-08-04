@@ -2,9 +2,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from resolve_time_tracker.config import Config
 from resolve_time_tracker.store import Segment, Store
 from resolve_time_tracker.syncer import merge_segments, sync
 from resolve_time_tracker.toggl import TogglError
+from resolve_time_tracker.workspace import DEFAULT_PROJECT_NAME
 
 START = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -27,10 +29,16 @@ def segment(seg_id, project, offset_seconds, duration_seconds, pages=("color",))
 
 
 class FakeToggl:
-    def __init__(self, fail_times=0):
+    def __init__(self, fail_times=0, workspaces=None, projects=None):
         self.calls = []
         self._fail_times = fail_times
         self._next_id = 1000
+        # Default: genau ein Workspace, damit resolve_workspace_id() in Tests,
+        # die sich nicht fuer die Workspace-Aufloesung interessieren, klaglos
+        # durchlaeuft.
+        self._workspaces = workspaces if workspaces is not None else [{"id": 111}]
+        self._projects = projects if projects is not None else []
+        self.created_projects: list[dict] = []
 
     def create_time_entry(self, workspace_id, project_id, description, start, duration_seconds, tags):
         if self._fail_times > 0:
@@ -48,6 +56,17 @@ class FakeToggl:
         )
         self._next_id += 1
         return self._next_id
+
+    def workspaces(self):
+        return self._workspaces
+
+    def projects(self, workspace_id):
+        return self._projects
+
+    def create_project(self, workspace_id, name):
+        project = {"id": 9000 + len(self.created_projects), "name": name}
+        self.created_projects.append(project)
+        return project
 
 
 @pytest.fixture
@@ -111,7 +130,7 @@ def test_sync_pushes_mapped_projects_and_marks_them(store):
     store.set_mapping("Kunde_A", 111, 222)
     client = FakeToggl()
 
-    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
 
     assert result.pushed == 1
     assert client.calls[0]["workspace_id"] == 111
@@ -120,15 +139,52 @@ def test_sync_pushes_mapped_projects_and_marks_them(store):
     assert store.unsynced_segments(closed_before=START + timedelta(days=1)) == []
 
 
-def test_sync_skips_unmapped_projects_without_losing_them(store):
+def test_sync_auto_maps_unmapped_projects_to_the_default_project(store):
     add(store, "Kunde_Unbekannt", 0, 600)
-    client = FakeToggl()
+    client = FakeToggl(
+        workspaces=[{"id": 111}], projects=[{"id": 222, "name": DEFAULT_PROJECT_NAME}]
+    )
 
-    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
+
+    assert result.pushed == 1
+    assert client.calls[0]["workspace_id"] == 111
+    assert client.calls[0]["project_id"] == 222
+    assert store.unsynced_segments(closed_before=START + timedelta(days=1)) == []
+
+    # Die automatische Zuordnung wird festgehalten, nicht nur einmalig verwendet
+    # -- kuenftige Syncs (und das Zuordnen-Menue) sehen das Projekt als zugeordnet.
+    mapping = store.get_mapping("Kunde_Unbekannt")
+    assert mapping.toggl_workspace_id == 111
+    assert mapping.toggl_project_id == 222
+
+
+def test_sync_creates_the_default_project_if_it_does_not_exist_yet(store):
+    add(store, "Kunde_Unbekannt", 0, 600)
+    client = FakeToggl(workspaces=[{"id": 111}], projects=[])
+
+    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
+
+    assert result.pushed == 1
+    assert client.created_projects == [{"id": 9000, "name": DEFAULT_PROJECT_NAME}]
+    assert client.calls[0]["project_id"] == 9000
+
+
+def test_sync_falls_back_to_skipped_unmapped_when_the_workspace_is_ambiguous(store):
+    """Ohne genau einen Workspace gibt es keinen sicheren Default -- dann bleibt
+
+    das Projekt wie bisher in der Warteschlange stehen, statt in einen
+    moeglicherweise falschen Workspace gepusht zu werden.
+    """
+    add(store, "Kunde_Unbekannt", 0, 600)
+    client = FakeToggl(workspaces=[{"id": 111}, {"id": 222}])
+
+    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
 
     assert result.pushed == 0
     assert result.skipped_unmapped == ["Kunde_Unbekannt"]
     assert len(store.unsynced_segments(closed_before=START + timedelta(days=1))) == 1
+    assert store.get_mapping("Kunde_Unbekannt") is None
 
 
 def test_running_sync_twice_creates_no_duplicates(store):
@@ -136,8 +192,8 @@ def test_running_sync_twice_creates_no_duplicates(store):
     store.set_mapping("Kunde_A", 111, 222)
     client = FakeToggl()
 
-    sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600)
-    sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600)
+    sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
+    sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
 
     assert len(client.calls) == 1
 
@@ -147,7 +203,7 @@ def test_a_failed_push_leaves_the_segment_in_the_queue(store):
     store.set_mapping("Kunde_A", 111, 222)
     client = FakeToggl(fail_times=1)
 
-    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(days=1), merge_gap_seconds=600, config=Config())
 
     assert result.failed == 1
     assert len(store.unsynced_segments(closed_before=START + timedelta(days=1))) == 1
@@ -159,7 +215,7 @@ def test_recent_segments_are_held_back_until_the_gap_has_passed(store):
     client = FakeToggl()
 
     # Nur 60 s nach Segmentende: koennte noch weitergearbeitet werden, also nicht pushen.
-    result = sync(store, client, now=START + timedelta(seconds=660), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(seconds=660), merge_gap_seconds=600, config=Config())
 
     assert result.pushed == 0
     assert client.calls == []
@@ -183,13 +239,13 @@ def test_segments_within_merge_gap_are_not_fragmented_if_second_segment_is_recen
 
     # First sync: 100s after second segment closes, merge_gap=600s
     # Group should be deferred, not split
-    result = sync(store, client, now=START + timedelta(seconds=1600), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(seconds=1600), merge_gap_seconds=600, config=Config())
     assert result.pushed == 0
     assert client.calls == []
     assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=1600))) == 2
 
     # Second sync: 600s after second segment closes, now past the gap
-    result = sync(store, client, now=START + timedelta(seconds=2100), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(seconds=2100), merge_gap_seconds=600, config=Config())
     assert result.pushed == 1
     assert len(client.calls) == 1
     # Verify the merged entry has both segments' duration
@@ -216,7 +272,7 @@ def test_an_open_segment_of_the_same_project_holds_back_a_settled_group(store):
     client = FakeToggl()
 
     # Plenty of time has passed since the closed group settled.
-    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600, config=Config())
 
     assert result.pushed == 0
     assert client.calls == []
@@ -237,7 +293,7 @@ def test_an_open_segment_of_a_different_project_does_not_hold_back_the_group(sto
 
     client = FakeToggl()
 
-    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600)
+    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600, config=Config())
 
     assert result.pushed == 1
     assert client.calls[0]["description"] == "Kunde_A"

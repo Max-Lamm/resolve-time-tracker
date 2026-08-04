@@ -6,8 +6,10 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from .config import Config
 from .store import Segment, Store
 from .toggl import TogglError
+from .workspace import resolve_default_project_id, resolve_workspace_id
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ def _to_group(project: str, run: list[Segment]) -> SegmentGroup:
     )
 
 
-def sync(store: Store, client, now: datetime, merge_gap_seconds: float) -> SyncResult:
+def sync(store: Store, client, now: datetime, merge_gap_seconds: float, config: Config) -> SyncResult:
     result = SyncResult()
     # Fetch all unsynced segments closed so far, don't filter by cutoff yet
     pending = store.unsynced_segments(closed_before=now)
@@ -96,15 +98,30 @@ def sync(store: Store, client, now: datetime, merge_gap_seconds: float) -> SyncR
             continue
 
         mapping = store.get_mapping(group.project)
-        if mapping is None:
-            if group.project not in result.skipped_unmapped:
-                result.skipped_unmapped.append(group.project)
-            continue
+        if mapping is not None:
+            workspace_id = mapping.toggl_workspace_id
+            project_id = mapping.toggl_project_id
+        else:
+            # Noch keine Zuordnung -- statt die Zeit stillschweigend liegen zu
+            # lassen, faellt sie auf ein Default-Projekt zurueck. Nur wenn
+            # nicht mal der Workspace sicher aufloesbar ist (mehrere
+            # Workspaces ohne Override), bleibt der alte skipped_unmapped-Pfad.
+            try:
+                workspace_id = resolve_workspace_id(store, client, config)
+                project_id = resolve_default_project_id(store, client, workspace_id)
+            except TogglError:
+                log.exception(
+                    "Workspace/Default-Projekt fuer %s nicht aufloesbar", group.project
+                )
+                if group.project not in result.skipped_unmapped:
+                    result.skipped_unmapped.append(group.project)
+                continue
+            store.set_mapping(group.project, workspace_id, project_id)
 
         try:
             entry_id = client.create_time_entry(
-                workspace_id=mapping.toggl_workspace_id,
-                project_id=mapping.toggl_project_id,
+                workspace_id=workspace_id,
+                project_id=project_id,
                 description=group.project,
                 start=group.started_at,
                 duration_seconds=group.duration_seconds,

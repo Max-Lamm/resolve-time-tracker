@@ -29,10 +29,10 @@ This will start the app automatically on login and register it with launchd.
 
 ### 2. Everything else happens in the menubar
 
-Resolve usually fills most of the menubar, so the app shows a single character there: `●` while tracking, `○` while idle or paused, `·` when Resolve isn't open. Click it for the full menu:
+Resolve usually fills most of the menubar, so the app shows a single colored circle there: 🟢 while tracking, 🟡 while idle or paused, ⚪ when nothing is being tracked (Resolve closed, or open without a project). Click it for the full menu:
 
 - **Toggl-Token einrichten…** — stores your Toggl API token in the macOS keychain. Only needed once.
-- **Zuordnen** — one submenu entry per Resolve project you've worked in. Each opens your active Toggl projects (archived ones are filtered out); clicking one maps it, and a checkmark shows the current mapping so you can correct it later. **Neues Toggl-Projekt anlegen…** creates a new Toggl project on the spot and maps it immediately.
+- **Zuordnen** — one submenu entry per Resolve project you've worked in. Each opens your active Toggl projects (archived ones are filtered out); clicking one maps it, and a checkmark shows the current mapping so you can correct it later. **Neues Toggl-Projekt anlegen…** creates a new Toggl project on the spot and maps it immediately. Projects you never got around to mapping aren't left behind either — see the sync note below.
 - **Jetzt synchronisieren** — pushes finished, unsynced segments to Toggl right away, instead of waiting for the automatic 10-minute sync.
 - **Pause** — stops tracking until you resume it, independent of Resolve's own state.
 - **Beim Login starten** — toggles the launch agent on or off for future logins (via `launchctl enable`/`disable`); the app keeps running either way. Disabled until `make install` has registered the agent once.
@@ -40,7 +40,19 @@ Resolve usually fills most of the menubar, so the app shows a single character t
 
 There's only one Toggl workspace to worry about for most setups: the app detects it automatically on first use and remembers it. If your account has more than one workspace, set `default_workspace_id` under `[toggl]` in the config file to pick one explicitly.
 
+A Resolve project that's never been mapped doesn't get skipped on sync anymore: it's pushed to a catch-all Toggl project called **RESOLVE (Auto-Track)** (created automatically if it doesn't exist yet), and that mapping is remembered — the project shows up as mapped to it in the **Zuordnen** menu afterwards, ready to be corrected there if you want it somewhere more specific.
+
 The CLI equivalents (`rtt token`, `rtt map`, `rtt sync`, `rtt status`) still work and are useful for scripting or headless setups (see `uv run rtt --help`), but the menubar is the primary way to use the app day to day.
+
+### 3. Optional: a clickable app icon
+
+`make install` already means you never touch the CLI day to day — the launch agent starts the tracker automatically on login. If you'd rather start it manually sometimes (or don't want the launch agent at all), run:
+
+```bash
+make app
+```
+
+This assembles `dist/Resolve Time Tracker.app` directly (a `.app` bundle is just a folder with a script and an `Info.plist`, no packaging tool needed — and nothing gets frozen, so it can't drift out of sync with the interpreter DaVinci Resolve's scripting API expects). Drag it into `/Applications` (or leave it in `dist/`) and double-click to start. It's a manual alternative to the launch agent, not a replacement for it: starting it while the launch agent is already running is refused with a native "already running" alert, since two tracking processes writing to the same database at once could create conflicting segments.
 
 ## Data Storage
 
