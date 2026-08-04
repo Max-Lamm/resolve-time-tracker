@@ -175,6 +175,17 @@ class Store:
             (resolve_project, workspace_id, project_id),
         )
 
+    def all_projects(self) -> list[str]:
+        """Alle Resolve-Projekte, die je ein Segment hatten -- zugeordnet oder nicht.
+
+        Fuer die Zuordnen-UI: unmapped_projects() reicht dort nicht, weil eine
+        bestehende Zuordnung sich auch korrigieren lassen soll.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT resolve_project FROM segments ORDER BY resolve_project"
+        ).fetchall()
+        return [row["resolve_project"] for row in rows]
+
     def unmapped_projects(self) -> list[str]:
         rows = self._conn.execute(
             "SELECT DISTINCT s.resolve_project FROM segments s"
@@ -200,6 +211,17 @@ class Store:
         self._conn.execute(
             f"UPDATE segments SET toggl_entry_id = ?, synced_at = ? WHERE id IN ({placeholders})",
             (toggl_entry_id, _dump(synced_at), *segment_ids),
+        )
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row is not None else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?)"
+            " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
         )
 
     def totals_since(self, since: datetime) -> dict[str, float]:

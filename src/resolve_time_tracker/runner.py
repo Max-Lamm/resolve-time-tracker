@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Callable
 
 from .config import Config
-from .models import CloseSegment, OpenSegment, Tick, TouchSegment
+from .models import CloseSegment, OpenSegment, ResolveSnapshot, Tick, TouchSegment
 from .store import Store
-from .tracker import Tracker
+from .tracker import Tracker, TrackerState
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,9 @@ class RunnerStatus:
     current_seconds: float
     today_seconds: float
     unmapped: list[str]
+    tracker_state: TrackerState
+    resolve_connected: bool
+    resolve_project_open: bool
 
 
 class Runner:
@@ -61,6 +64,7 @@ class Runner:
         self._config = config
         self._local_tz = local_tz
         self._open_segment_id: int | None = None
+        self._last_snapshot: ResolveSnapshot = ResolveSnapshot(connected=False)
         self.manual_pause = False
 
         # Nach einem Absturz kann ein Segment offen stehengeblieben sein. Es wird
@@ -72,6 +76,7 @@ class Runner:
     def tick_once(self) -> None:
         frontmost = self._frontmost_source()
         snapshot = self._probe.poll()
+        self._last_snapshot = snapshot
         tick = Tick(
             now=self._clock(),
             snapshot=snapshot,
@@ -114,4 +119,9 @@ class Runner:
             current_seconds=current_seconds,
             today_seconds=sum(totals.values()),
             unmapped=self._store.unmapped_projects(),
+            tracker_state=self._tracker.state,
+            resolve_connected=self._last_snapshot.connected,
+            resolve_project_open=(
+                self._last_snapshot.connected and self._last_snapshot.project_name is not None
+            ),
         )

@@ -11,6 +11,7 @@ import httpx
 BASE_URL = "https://api.track.toggl.com/api/v9"
 CREATED_WITH = "resolve-time-tracker"
 MAX_ATTEMPTS = 3
+PROJECTS_PAGE_SIZE = 200
 
 
 class TogglError(Exception):
@@ -43,8 +44,32 @@ class TogglClient:
     def workspaces(self) -> list[dict[str, Any]]:
         return self._request("GET", "/me/workspaces")
 
-    def projects(self, workspace_id: int) -> list[dict[str, Any]]:
-        return self._request("GET", f"/workspaces/{workspace_id}/projects")
+    def projects(self, workspace_id: int, active_only: bool = True) -> list[dict[str, Any]]:
+        """Alle Projekte eines Workspace, standardmaessig ohne Archiv.
+
+        Gegen das echte Konto geprueft: 201 Projekte insgesamt, nur 6 davon
+        aktiv. Ohne serverseitigen Filter waere die Auswahl unbrauchbar gross,
+        und ohne Paginierung wuerde eine Antwort ueber PROJECTS_PAGE_SIZE
+        Eintraegen still abgeschnitten.
+        """
+        params: dict[str, Any] = {"per_page": PROJECTS_PAGE_SIZE}
+        if active_only:
+            params["active"] = "true"
+
+        projects: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            params["page"] = page
+            batch = self._request("GET", f"/workspaces/{workspace_id}/projects", params=params)
+            projects.extend(batch)
+            if len(batch) < PROJECTS_PAGE_SIZE:
+                break
+            page += 1
+        return projects
+
+    def create_project(self, workspace_id: int, name: str) -> dict[str, Any]:
+        payload = {"name": name, "active": True}
+        return self._request("POST", f"/workspaces/{workspace_id}/projects", json=payload)
 
     def create_time_entry(
         self,
@@ -74,12 +99,16 @@ class TogglClient:
             self._sleep(self._min_interval - elapsed)
         self._last_request_at = time.monotonic()
 
-    def _request(self, method: str, path: str, json: Any = None) -> Any:
+    def _request(
+        self, method: str, path: str, json: Any = None, params: dict[str, Any] | None = None
+    ) -> Any:
         last_error: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
             self._throttle()
             try:
-                response = self._http.request(method, f"{BASE_URL}{path}", auth=self._auth, json=json)
+                response = self._http.request(
+                    method, f"{BASE_URL}{path}", auth=self._auth, json=json, params=params
+                )
             except httpx.HTTPError as e:
                 raise TogglError(f"Netzwerkfehler bei {method} {path}: {e}")
 

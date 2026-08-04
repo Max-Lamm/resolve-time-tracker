@@ -74,6 +74,18 @@ def test_mark_synced_removes_segments_from_the_queue(store):
     assert store.segments_since(START)[0].toggl_entry_id == 999
 
 
+def test_all_projects_lists_every_resolve_project_regardless_of_mapping(store):
+    add_closed_segment(store, "Kunde_A", 0, 600)
+    add_closed_segment(store, "Kunde_B", 700, 600)
+    store.set_mapping("Kunde_A", 111, 222)
+
+    assert store.all_projects() == ["Kunde_A", "Kunde_B"]
+
+
+def test_all_projects_is_empty_without_segments(store):
+    assert store.all_projects() == []
+
+
 def test_totals_since_sums_per_project(store):
     add_closed_segment(store, "Kunde_A", 0, 600)
     add_closed_segment(store, "Kunde_A", 700, 300)
