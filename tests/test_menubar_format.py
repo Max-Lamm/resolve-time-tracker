@@ -1,4 +1,6 @@
-from resolve_time_tracker.menubar import format_duration, format_title
+from unittest.mock import MagicMock, patch
+
+from resolve_time_tracker.menubar import TrackerApp, format_duration, format_title
 from resolve_time_tracker.runner import RunnerStatus
 
 
@@ -35,3 +37,38 @@ def test_long_project_names_are_shortened():
     )
     assert len(title) <= 28
     assert title.endswith("…")
+
+
+def test_quit_stops_timers_before_closing_the_store():
+    """A tick already queued on the run loop ahead of quit_application() must not
+    be able to fire against an already-closed sqlite connection."""
+    app = TrackerApp.__new__(TrackerApp)
+    order = []
+    app._tick_timer = MagicMock()
+    app._tick_timer.stop.side_effect = lambda: order.append("tick_timer.stop")
+    app._sync_timer = MagicMock()
+    app._sync_timer.stop.side_effect = lambda: order.append("sync_timer.stop")
+    app._store = MagicMock()
+    app._store.close.side_effect = lambda: order.append("store.close")
+
+    with patch("resolve_time_tracker.menubar.rumps.quit_application") as quit_mock:
+        quit_mock.side_effect = lambda: order.append("quit_application")
+        app._quit(None)
+
+    assert order.index("tick_timer.stop") < order.index("store.close")
+    assert order.index("sync_timer.stop") < order.index("store.close")
+    assert order.index("store.close") < order.index("quit_application")
+
+
+def test_quit_works_without_a_sync_timer():
+    """auto_push disabled means _sync_timer is None; quit must not blow up on it."""
+    app = TrackerApp.__new__(TrackerApp)
+    app._tick_timer = MagicMock()
+    app._sync_timer = None
+    app._store = MagicMock()
+
+    with patch("resolve_time_tracker.menubar.rumps.quit_application"):
+        app._quit(None)
+
+    app._tick_timer.stop.assert_called_once()
+    app._store.close.assert_called_once()

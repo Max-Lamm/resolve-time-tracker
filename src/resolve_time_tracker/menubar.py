@@ -56,9 +56,12 @@ class TrackerApp(rumps.App):
             rumps.MenuItem("Beenden", callback=self._quit),
         ]
 
-        rumps.Timer(self._on_tick, int(self._config.tick_seconds)).start()
+        self._tick_timer = rumps.Timer(self._on_tick, int(self._config.tick_seconds))
+        self._tick_timer.start()
+        self._sync_timer = None
         if self._config.auto_push:
-            rumps.Timer(self._on_sync_timer, 600).start()
+            self._sync_timer = rumps.Timer(self._on_sync_timer, 600)
+            self._sync_timer.start()
 
     def _on_tick(self, _timer) -> None:
         try:
@@ -116,6 +119,13 @@ class TrackerApp(rumps.App):
         subprocess.run(["open", str(cfg.log_path())], check=False)
 
     def _quit(self, _sender) -> None:
+        # Timer must be stopped before the store closes: rumps schedules ticks on
+        # the same run loop this callback runs on, and a tick already queued
+        # ahead of quit_application() would otherwise fire against a closed
+        # sqlite connection.
+        self._tick_timer.stop()
+        if self._sync_timer is not None:
+            self._sync_timer.stop()
         self._store.close()
         rumps.quit_application()
 
