@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _SCHEMA = """
@@ -53,8 +53,23 @@ class Segment:
         return (end - self.started_at).total_seconds()
 
 
+def _require_utc(value: datetime) -> datetime:
+    """Enforce that datetime values are timezone-aware UTC.
+
+    Raises ValueError if the datetime is naive or not in UTC timezone.
+    """
+    if value.tzinfo is None:
+        raise ValueError(f"Naive datetime not allowed: {value}. All datetimes must be timezone-aware UTC.")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"Non-UTC datetime not allowed: {value}. All datetimes must be in UTC timezone.")
+    return value
+
+
 def _dump(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
+    if value is None:
+        return None
+    _require_utc(value)
+    return value.isoformat()
 
 
 def _load(value: str | None) -> datetime | None:

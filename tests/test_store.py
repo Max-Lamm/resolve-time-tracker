@@ -80,3 +80,42 @@ def test_close_stale_segments_cuts_back_to_last_activity(store):
 
 def test_close_stale_segments_is_a_noop_when_nothing_is_open(store):
     assert store.close_stale_segments() == 0
+
+
+def test_open_segment_rejects_naive_datetime(store):
+    """Naive datetimes are forbidden to prevent silent data corruption."""
+    naive_dt = datetime(2026, 8, 3, 10, 0)
+    with pytest.raises(ValueError, match="Naive datetime not allowed"):
+        store.open_segment("Kunde_A", "Local", naive_dt, "color")
+
+
+def test_touch_segment_rejects_naive_datetime(store):
+    """Naive datetimes are forbidden to prevent silent data corruption."""
+    segment_id = store.open_segment("Kunde_A", "Local", START, "color")
+    naive_dt = datetime(2026, 8, 3, 10, 5)
+    with pytest.raises(ValueError, match="Naive datetime not allowed"):
+        store.touch_segment(segment_id, naive_dt, "edit")
+
+
+def test_close_segment_rejects_naive_datetime(store):
+    """Naive datetimes are forbidden to prevent silent data corruption."""
+    segment_id = store.open_segment("Kunde_A", "Local", START, "color")
+    naive_dt = datetime(2026, 8, 3, 10, 5)
+    with pytest.raises(ValueError, match="Naive datetime not allowed"):
+        store.close_segment(segment_id, naive_dt)
+
+
+def test_segments_since_rejects_naive_datetime(store):
+    """Naive datetimes are forbidden to prevent silent data corruption."""
+    store.open_segment("Kunde_A", "Local", START, "color")
+    naive_dt = datetime(2026, 8, 3, 10, 0)
+    with pytest.raises(ValueError, match="Naive datetime not allowed"):
+        store.segments_since(naive_dt)
+
+
+def test_open_segment_rejects_non_utc_datetime(store):
+    """Non-UTC datetimes are forbidden to prevent sorting corruption."""
+    # Datetime with offset of +02:00 instead of UTC
+    non_utc_dt = datetime(2026, 8, 3, 10, 0, tzinfo=timezone(timedelta(hours=2)))
+    with pytest.raises(ValueError, match="Non-UTC datetime not allowed"):
+        store.open_segment("Kunde_A", "Local", non_utc_dt, "color")
