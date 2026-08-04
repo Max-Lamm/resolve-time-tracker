@@ -1,0 +1,99 @@
+"""Verdrahtet Adapter, Zustandsmaschine und Datenbank zu einem Tick."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Callable
+
+from .config import Config
+from .models import CloseSegment, OpenSegment, Tick, TouchSegment
+from .store import Store
+from .tracker import Tracker
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RunnerStatus:
+    project: str | None
+    is_running: bool
+    current_seconds: float
+    today_seconds: float
+    unmapped: list[str]
+
+
+class Runner:
+    def __init__(
+        self,
+        store: Store,
+        tracker: Tracker,
+        probe,
+        clock: Callable[[], datetime],
+        idle_source: Callable[[], float],
+        frontmost_source: Callable[[], str | None],
+        config: Config,
+    ) -> None:
+        self._store = store
+        self._tracker = tracker
+        self._probe = probe
+        self._clock = clock
+        self._idle_source = idle_source
+        self._frontmost_source = frontmost_source
+        self._config = config
+        self._open_segment_id: int | None = None
+        self.manual_pause = False
+
+        # Nach einem Absturz kann ein Segment offen stehengeblieben sein. Es wird
+        # auf seinen letzten bekannten Aktiv-Zeitpunkt zurueckgeschnitten.
+        closed = self._store.close_stale_segments()
+        if closed:
+            log.warning("%d verwaiste Segmente beim Start geschlossen", closed)
+
+    def tick_once(self) -> None:
+        frontmost = self._frontmost_source()
+        snapshot = self._probe.poll()
+        tick = Tick(
+            now=self._clock(),
+            snapshot=snapshot,
+            idle_seconds=self._idle_source(),
+            frontmost_bundle_id=frontmost,
+            manual_pause=self.manual_pause,
+        )
+
+        for command in self._tracker.tick(tick):
+            self._apply(command)
+
+    def _apply(self, command) -> None:
+        if isinstance(command, OpenSegment):
+            self._open_segment_id = self._store.open_segment(
+                command.project, command.database, command.started_at, command.page
+            )
+        elif isinstance(command, TouchSegment):
+            if self._open_segment_id is not None:
+                self._store.touch_segment(
+                    self._open_segment_id, command.last_active_at, command.page
+                )
+        elif isinstance(command, CloseSegment):
+            if self._open_segment_id is not None:
+                self._store.close_segment(self._open_segment_id, command.ended_at)
+                self._open_segment_id = None
+
+    def status(self) -> RunnerStatus:
+        now = self._clock()
+        open_segment = self._store.current_open_segment()
+        current_seconds = (
+            (open_segment.last_active_at - open_segment.started_at).total_seconds()
+            if open_segment
+            else 0.0
+        )
+        day_start = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        totals = self._store.totals_since(day_start.astimezone(timezone.utc))
+        return RunnerStatus(
+            project=self._tracker.current_project if open_segment else None,
+            is_running=open_segment is not None,
+            current_seconds=current_seconds,
+            today_seconds=sum(totals.values()),
+            unmapped=self._store.unmapped_projects(),
+        )
