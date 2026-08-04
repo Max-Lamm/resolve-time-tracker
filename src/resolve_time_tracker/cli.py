@@ -56,9 +56,9 @@ def cmd_daemon(_args) -> int:
         while True:
             try:
                 runner.tick_once()
-                time.sleep(config.tick_seconds)
             except Exception:
                 log.exception("Fehler beim Tick, fortfahren")
+            time.sleep(config.tick_seconds)
     except KeyboardInterrupt:
         return 0
     finally:
