@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import logging
+import subprocess
 import time
 from datetime import datetime, timezone
 
 from . import config as cfg
 from .runner import Runner, local_day_start
+from .singleton import AlreadyRunning, acquire_lock
 from .store import Store
 from .tracker import Tracker
 
@@ -48,6 +50,18 @@ def _client():
 
 
 def cmd_daemon(_args) -> int:
+    # Vor dem Store: ein zweiter Tracking-Prozess (z. B. LaunchAgent laeuft
+    # schon im Hintergrund) darf nicht gegen dieselbe Datenbank schreiben.
+    # Der Handle muss in einer Variable gehalten werden, die den ganzen
+    # Prozess ueberlebt -- sonst schliesst der GC ihn sofort wieder und das
+    # Lock ist augenblicklich weg (derselbe Fehler wie beim rumps.Timer in
+    # menubar.py, siehe dortiger Kommentar zu _quit()).
+    try:
+        _lock = acquire_lock(cfg.lock_path())
+    except AlreadyRunning:
+        print("Resolve Time Tracker laeuft bereits (Menubar oder ein anderer Daemon). Abbruch.")
+        return 1
+
     config = cfg.load_config()
     store = _open_store()
     runner = build_runner(store, config)
@@ -67,6 +81,26 @@ def cmd_daemon(_args) -> int:
 
 def cmd_menubar(_args) -> int:
     from .menubar import run_menubar
+
+    # Referenz auf den Handle muss bis zum Prozessende leben, siehe Kommentar
+    # in cmd_daemon -- hier laeuft run_menubar() blockierend in derselben
+    # Aufrufkette weiter, solange bleibt _lock im Scope und damit lebendig.
+    try:
+        _lock = acquire_lock(cfg.lock_path())
+    except AlreadyRunning:
+        # Kein rumps-App-Kontext an dieser Stelle fuer rumps.notification,
+        # deshalb ein natives Alert per osascript.
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'display alert "Resolve Time Tracker" message '
+                '"Laeuft bereits – siehe Menueleiste." as warning',
+            ],
+            check=False,
+        )
+        print("Resolve Time Tracker laeuft bereits.")
+        return 1
 
     return run_menubar()
 

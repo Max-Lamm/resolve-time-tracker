@@ -44,6 +44,16 @@ A Resolve project that's never been mapped doesn't get skipped on sync anymore: 
 
 The CLI equivalents (`rtt token`, `rtt map`, `rtt sync`, `rtt status`) still work and are useful for scripting or headless setups (see `uv run rtt --help`), but the menubar is the primary way to use the app day to day.
 
+### 3. Optional: a clickable app icon
+
+`make install` already means you never touch the CLI day to day — the launch agent starts the tracker automatically on login. If you'd rather start it manually sometimes (or don't want the launch agent at all), run:
+
+```bash
+make app
+```
+
+This assembles `dist/Resolve Time Tracker.app` directly (a `.app` bundle is just a folder with a script and an `Info.plist`, no packaging tool needed — and nothing gets frozen, so it can't drift out of sync with the interpreter DaVinci Resolve's scripting API expects). Drag it into `/Applications` (or leave it in `dist/`) and double-click to start. It's a manual alternative to the launch agent, not a replacement for it: starting it while the launch agent is already running is refused with a native "already running" alert, since two tracking processes writing to the same database at once could create conflicting segments.
+
 ## Data Storage
 
 Time tracking data and configuration are stored in:
