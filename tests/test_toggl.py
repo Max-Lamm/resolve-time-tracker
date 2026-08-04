@@ -6,7 +6,7 @@ import httpx
 import pytest
 import respx
 
-from resolve_time_tracker.toggl import BASE_URL, TogglClient, TogglRateLimited
+from resolve_time_tracker.toggl import BASE_URL, TogglClient, TogglError, TogglRateLimited
 
 START = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -99,3 +99,13 @@ def test_workspaces_and_projects_are_returned_as_lists(client):
 
     assert client.workspaces()[0]["name"] == "monacoframe"
     assert client.projects(111)[0]["id"] == 222
+
+
+@respx.mock
+def test_network_errors_are_converted_to_toggl_error(client):
+    respx.post(f"{BASE_URL}/workspaces/111/time_entries").mock(
+        side_effect=httpx.ConnectError("Network unreachable")
+    )
+
+    with pytest.raises(TogglError):
+        client.create_time_entry(111, 222, "Kunde_A", START, 60, [])

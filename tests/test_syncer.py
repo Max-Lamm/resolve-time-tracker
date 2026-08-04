@@ -163,3 +163,35 @@ def test_recent_segments_are_held_back_until_the_gap_has_passed(store):
 
     assert result.pushed == 0
     assert client.calls == []
+
+
+def test_segments_within_merge_gap_are_not_fragmented_if_second_segment_is_recent(store):
+    """Two segments of same project, 300s apart (within 600s merge gap).
+
+    Scenario: A (0-600s), B (900-1500s), merge_gap=600s.
+    Sync at 1600s (only 100s after B closes).
+    Expected: 0 pushes (entire group deferred until settled)
+    Later sync at 2100s: 1 push with both merged (600s after B ends)
+
+    Reproduces the fragmentation bug where cutoff filtering before merge
+    would split A and B into separate pushes.
+    """
+    add(store, "Kunde_A", 0, 600)
+    add(store, "Kunde_A", 900, 600)
+    store.set_mapping("Kunde_A", 111, 222)
+    client = FakeToggl()
+
+    # First sync: 100s after second segment closes, merge_gap=600s
+    # Group should be deferred, not split
+    result = sync(store, client, now=START + timedelta(seconds=1600), merge_gap_seconds=600)
+    assert result.pushed == 0
+    assert client.calls == []
+    assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=1600))) == 2
+
+    # Second sync: 600s after second segment closes, now past the gap
+    result = sync(store, client, now=START + timedelta(seconds=2100), merge_gap_seconds=600)
+    assert result.pushed == 1
+    assert len(client.calls) == 1
+    # Verify the merged entry has both segments' duration
+    assert client.calls[0]["duration_seconds"] == 1200
+    assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=2100))) == 0

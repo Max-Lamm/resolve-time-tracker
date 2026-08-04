@@ -19,6 +19,7 @@ class SegmentGroup:
     started_at: datetime
     duration_seconds: int
     tags: list[str]
+    ended_at: datetime
 
 
 @dataclass
@@ -62,15 +63,22 @@ def _to_group(project: str, run: list[Segment]) -> SegmentGroup:
         # Nur echte Arbeitszeit, die Luecken zwischen den Segmenten sind Pausen.
         duration_seconds=int(sum(seg.duration_seconds for seg in run)),
         tags=tags,
+        ended_at=run[-1].ended_at,
     )
 
 
 def sync(store: Store, client, now: datetime, merge_gap_seconds: float) -> SyncResult:
     result = SyncResult()
-    cutoff = now - timedelta(seconds=merge_gap_seconds)
-    pending = store.unsynced_segments(closed_before=cutoff)
+    # Fetch all unsynced segments closed so far, don't filter by cutoff yet
+    pending = store.unsynced_segments(closed_before=now)
 
     for group in merge_segments(pending, merge_gap_seconds):
+        # Only push if the group has settled (last segment ended long enough ago)
+        settle_time = now - group.ended_at
+        if settle_time < timedelta(seconds=merge_gap_seconds):
+            # Group hasn't settled yet, hold it for the next sync run
+            continue
+
         mapping = store.get_mapping(group.project)
         if mapping is None:
             if group.project not in result.skipped_unmapped:

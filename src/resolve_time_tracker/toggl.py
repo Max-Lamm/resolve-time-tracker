@@ -78,7 +78,10 @@ class TogglClient:
         last_error: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
             self._throttle()
-            response = self._http.request(method, f"{BASE_URL}{path}", auth=self._auth, json=json)
+            try:
+                response = self._http.request(method, f"{BASE_URL}{path}", auth=self._auth, json=json)
+            except httpx.HTTPError as e:
+                raise TogglError(f"Netzwerkfehler bei {method} {path}: {e}")
 
             if response.status_code == 429:
                 retry_after = float(response.headers.get("Retry-After", 2**attempt))
