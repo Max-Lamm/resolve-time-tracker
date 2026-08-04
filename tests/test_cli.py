@@ -4,6 +4,17 @@ import pytest
 
 from resolve_time_tracker.cli import main
 from resolve_time_tracker.singleton import AlreadyRunning, acquire_lock, release_lock
+from resolve_time_tracker.toggl import TogglError
+
+
+@pytest.fixture(autouse=True)
+def _isolated_log_path(tmp_path, monkeypatch):
+    """main() konfiguriert bei jedem Aufruf ein Logfile unter cfg.log_path() --
+
+    ohne diesen Patch wuerden alle main()-Aufrufe in diesen Tests ins echte
+    ~/Library/Logs/resolve-time-tracker.log schreiben.
+    """
+    monkeypatch.setattr("resolve_time_tracker.config.log_path", lambda: tmp_path / "test.log")
 
 
 def test_unknown_command_exits_with_error():
@@ -83,6 +94,36 @@ def test_menubar_keeps_the_lock_held_for_run_menubars_whole_lifetime(tmp_path, m
     monkeypatch.setattr("resolve_time_tracker.menubar.run_menubar", fake_run_menubar)
 
     assert main(["menubar"]) == 0
+
+
+def test_token_is_rejected_and_not_saved_when_toggl_rejects_it(monkeypatch, capsys):
+    """cmd_token darf einen von Toggl abgelehnten Token nicht in der Keychain
+
+    ablegen -- sonst landet ein Vertipper still dort und faellt erst spaeter
+    als leere Projektliste bzw. gescheiterter Sync auf.
+    """
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "falscher-token")
+
+    def fake_check_token(_token):
+        raise TogglError("403 auf GET /me/workspaces: Incorrect username and/or password")
+
+    monkeypatch.setattr("resolve_time_tracker.cli.check_token", fake_check_token)
+    saved = []
+    monkeypatch.setattr("resolve_time_tracker.cli.cfg.set_token", lambda t: saved.append(t))
+
+    assert main(["token"]) == 1
+    assert saved == []
+    assert "abgelehnt" in capsys.readouterr().out.lower()
+
+
+def test_token_is_saved_when_toggl_accepts_it(monkeypatch, capsys):
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "gueltiger-token")
+    monkeypatch.setattr("resolve_time_tracker.cli.check_token", lambda _token: None)
+    saved = []
+    monkeypatch.setattr("resolve_time_tracker.cli.cfg.set_token", lambda t: saved.append(t))
+
+    assert main(["token"]) == 0
+    assert saved == ["gueltiger-token"]
 
 
 def test_daemon_keeps_the_lock_held_during_the_tick_loop(tmp_path, monkeypatch):

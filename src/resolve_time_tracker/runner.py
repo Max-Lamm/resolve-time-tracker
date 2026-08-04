@@ -41,6 +41,7 @@ class RunnerStatus:
     tracker_state: TrackerState
     resolve_connected: bool
     resolve_project_open: bool
+    resolve_app_running: bool = True
 
 
 class Runner:
@@ -54,6 +55,7 @@ class Runner:
         frontmost_source: Callable[[], str | None],
         config: Config,
         local_tz: tzinfo | None = None,
+        resolve_running_source: Callable[[], bool] = lambda: True,
     ) -> None:
         self._store = store
         self._tracker = tracker
@@ -63,6 +65,7 @@ class Runner:
         self._frontmost_source = frontmost_source
         self._config = config
         self._local_tz = local_tz
+        self._resolve_running_source = resolve_running_source
         self._open_segment_id: int | None = None
         self._last_snapshot: ResolveSnapshot = ResolveSnapshot(connected=False)
         self.manual_pause = False
@@ -124,4 +127,5 @@ class Runner:
             resolve_project_open=(
                 self._last_snapshot.connected and self._last_snapshot.project_name is not None
             ),
+            resolve_app_running=self._resolve_running_source(),
         )

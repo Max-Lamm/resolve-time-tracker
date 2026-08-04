@@ -1,11 +1,12 @@
 from unittest.mock import MagicMock, patch
 
 from resolve_time_tracker.menubar import (
-    LAUNCH_AGENT_LABEL,
+    SETUP_WIZARD_META_KEY,
     TrackerApp,
-    _is_service_disabled,
+    _autostart_enabled,
     _mapping_signature,
     _project_menu_entries,
+    _set_autostart_enabled,
     format_duration,
     format_header,
     format_status_line,
@@ -25,6 +26,7 @@ def status(**kwargs):
         tracker_state=TrackerState.NO_RESOLVE,
         resolve_connected=False,
         resolve_project_open=False,
+        resolve_app_running=True,
     )
     base.update(kwargs)
     return RunnerStatus(**base)
@@ -67,12 +69,22 @@ def test_status_line_covers_every_tracker_state():
     )
 
 
-def test_status_line_distinguishes_the_two_no_resolve_reasons():
-    closed = status(tracker_state=TrackerState.NO_RESOLVE, resolve_connected=False)
+def test_status_line_distinguishes_the_three_no_tracking_reasons():
+    closed = status(
+        tracker_state=TrackerState.NO_RESOLVE, resolve_app_running=False, resolve_connected=False
+    )
     assert format_status_line(closed) == "Resolve laeuft nicht"
 
+    scripting_disabled = status(
+        tracker_state=TrackerState.NO_RESOLVE, resolve_app_running=True, resolve_connected=False
+    )
+    assert format_status_line(scripting_disabled) == "Resolve-Scripting nicht aktiviert"
+
     no_project = status(
-        tracker_state=TrackerState.NO_RESOLVE, resolve_connected=True, resolve_project_open=False
+        tracker_state=TrackerState.NO_RESOLVE,
+        resolve_app_running=True,
+        resolve_connected=True,
+        resolve_project_open=False,
     )
     assert format_status_line(no_project) == "Kein Projekt offen"
 
@@ -90,28 +102,37 @@ def test_header_shows_project_and_duration_while_running():
 
 
 def test_header_falls_back_to_the_status_line_when_not_running():
-    header = format_header(status(tracker_state=TrackerState.NO_RESOLVE, resolve_connected=False))
+    header = format_header(
+        status(
+            tracker_state=TrackerState.NO_RESOLVE, resolve_app_running=False, resolve_connected=False
+        )
+    )
     assert header == "⚪ Resolve laeuft nicht"
 
 
-def test_is_service_disabled_reads_the_matching_line():
-    output = (
-        '\tdisabled services = {\n'
-        '\t\t"com.apple.Siri.agent" => enabled\n'
-        f'\t\t"{LAUNCH_AGENT_LABEL}" => disabled\n'
-        '\t}\n'
-    )
-    assert _is_service_disabled(output, LAUNCH_AGENT_LABEL) is True
+def test_autostart_enabled_reflects_the_service_status():
+    with patch("resolve_time_tracker.menubar.SMAppService") as mock_cls:
+        mock_cls.mainAppService.return_value.status.return_value = 1  # Enabled
+        assert _autostart_enabled() is True
+
+        mock_cls.mainAppService.return_value.status.return_value = 0  # NotRegistered
+        assert _autostart_enabled() is False
 
 
-def test_is_service_disabled_defaults_to_false_when_label_is_absent():
-    output = '\tdisabled services = {\n\t\t"com.apple.Siri.agent" => enabled\n\t}\n'
-    assert _is_service_disabled(output, LAUNCH_AGENT_LABEL) is False
+def test_set_autostart_enabled_registers_when_turning_on():
+    with patch("resolve_time_tracker.menubar.SMAppService") as mock_cls:
+        service = mock_cls.mainAppService.return_value
+        _set_autostart_enabled(True)
+        service.registerAndReturnError_.assert_called_once_with(None)
+        service.unregisterAndReturnError_.assert_not_called()
 
 
-def test_is_service_disabled_false_when_explicitly_enabled():
-    output = f'\t\t"{LAUNCH_AGENT_LABEL}" => enabled\n'
-    assert _is_service_disabled(output, LAUNCH_AGENT_LABEL) is False
+def test_set_autostart_enabled_unregisters_when_turning_off():
+    with patch("resolve_time_tracker.menubar.SMAppService") as mock_cls:
+        service = mock_cls.mainAppService.return_value
+        _set_autostart_enabled(False)
+        service.unregisterAndReturnError_.assert_called_once_with(None)
+        service.registerAndReturnError_.assert_not_called()
 
 
 def test_project_menu_entries_are_sorted_and_mark_the_selected_one():
@@ -181,3 +202,120 @@ def test_quit_works_without_a_sync_timer():
 
     app._tick_timer.stop.assert_called_once()
     app._store.close.assert_called_once()
+
+
+def test_setup_wizard_runs_every_step_once_and_sets_the_marker():
+    app = TrackerApp.__new__(TrackerApp)
+    app._store = MagicMock()
+
+    with (
+        patch("resolve_time_tracker.menubar.rumps.alert") as alert_mock,
+        patch.object(TrackerApp, "_setup_wizard_check_resolve") as check_mock,
+        patch.object(TrackerApp, "_setup_wizard_offer_token") as token_mock,
+        patch.object(TrackerApp, "_setup_wizard_offer_autostart") as autostart_mock,
+    ):
+        app._run_setup_wizard(None)
+
+    alert_mock.assert_called_once()  # die Begruessung
+    check_mock.assert_called_once()
+    token_mock.assert_called_once()
+    autostart_mock.assert_called_once()
+    app._store.set_meta.assert_called_once_with(SETUP_WIZARD_META_KEY, "1")
+
+
+def test_setup_wizard_offer_token_skips_the_dialog_when_a_token_already_exists():
+    app = TrackerApp.__new__(TrackerApp)
+    with (
+        patch("resolve_time_tracker.menubar.cfg.get_token", return_value="existing"),
+        patch("resolve_time_tracker.menubar.rumps.alert") as alert_mock,
+    ):
+        app._setup_wizard_offer_token()
+    alert_mock.assert_not_called()
+
+
+def test_setup_wizard_offer_token_opens_the_token_dialog_when_accepted():
+    app = TrackerApp.__new__(TrackerApp)
+    app._set_token = MagicMock()
+    with (
+        patch("resolve_time_tracker.menubar.cfg.get_token", return_value=None),
+        patch("resolve_time_tracker.menubar.rumps.alert", return_value=1),
+    ):
+        app._setup_wizard_offer_token()
+    app._set_token.assert_called_once_with(None)
+
+
+def test_setup_wizard_offer_token_stays_skipped_when_declined():
+    """Der Assistent darf nie feststecken -- Abbrechen muss der Ausweg bleiben,
+
+    falls jemand seinen Toggl-Token gerade nicht zur Hand hat.
+    """
+    app = TrackerApp.__new__(TrackerApp)
+    app._set_token = MagicMock()
+    with (
+        patch("resolve_time_tracker.menubar.cfg.get_token", return_value=None),
+        patch("resolve_time_tracker.menubar.rumps.alert", return_value=0),
+    ):
+        app._setup_wizard_offer_token()
+    app._set_token.assert_not_called()
+
+
+def test_setup_wizard_offer_autostart_skips_the_dialog_when_already_enabled():
+    app = TrackerApp.__new__(TrackerApp)
+    with (
+        patch("resolve_time_tracker.menubar.SMAppService") as mock_cls,
+        patch("resolve_time_tracker.menubar.rumps.alert") as alert_mock,
+    ):
+        mock_cls.mainAppService.return_value.status.return_value = 1  # Enabled
+        app._setup_wizard_offer_autostart()
+    alert_mock.assert_not_called()
+
+
+def test_setup_wizard_offer_autostart_registers_when_accepted():
+    app = TrackerApp.__new__(TrackerApp)
+    app._refresh = MagicMock()
+    with (
+        patch("resolve_time_tracker.menubar.SMAppService") as mock_cls,
+        patch("resolve_time_tracker.menubar.rumps.alert", return_value=1),
+    ):
+        mock_cls.mainAppService.return_value.status.return_value = 0  # NotRegistered
+        app._setup_wizard_offer_autostart()
+    mock_cls.mainAppService.return_value.registerAndReturnError_.assert_called_once_with(None)
+    assert app._autostart_dirty is True
+    app._refresh.assert_called_once()
+
+
+def test_setup_wizard_check_resolve_does_nothing_when_already_connected():
+    app = TrackerApp.__new__(TrackerApp)
+    app._runner = MagicMock()
+    app._runner.status.return_value = status(resolve_connected=True)
+    with (
+        patch("resolve_time_tracker.activity.is_resolve_running") as running_mock,
+        patch("resolve_time_tracker.menubar.rumps.alert") as alert_mock,
+    ):
+        app._setup_wizard_check_resolve()
+    app._runner.tick_once.assert_called_once()
+    running_mock.assert_not_called()
+    alert_mock.assert_not_called()
+
+
+def test_setup_wizard_check_resolve_explains_when_resolve_is_not_running():
+    app = TrackerApp.__new__(TrackerApp)
+    app._runner = MagicMock()
+    app._runner.status.return_value = status(resolve_connected=False)
+    with (
+        patch("resolve_time_tracker.activity.is_resolve_running", return_value=False),
+        patch("resolve_time_tracker.menubar.rumps.alert") as alert_mock,
+    ):
+        app._setup_wizard_check_resolve()
+    assert alert_mock.call_count == 1
+    assert "Resolve Studio" in alert_mock.call_args.kwargs["message"]
+
+
+def test_setup_wizard_check_resolve_shows_scripting_help_when_resolve_runs_unconnected():
+    app = TrackerApp.__new__(TrackerApp)
+    app._runner = MagicMock()
+    app._runner.status.return_value = status(resolve_connected=False)
+    app._show_scripting_help = MagicMock()
+    with patch("resolve_time_tracker.activity.is_resolve_running", return_value=True):
+        app._setup_wizard_check_resolve()
+    app._show_scripting_help.assert_called_once_with(None)

@@ -124,3 +124,15 @@ class TogglClient:
             return response.json()
 
         raise last_error or TogglError(f"{method} {path} nach {MAX_ATTEMPTS} Versuchen gescheitert")
+
+
+def check_token(token: str) -> None:
+    """Prueft einen Toggl-Token, bevor er in der Keychain landet.
+
+    Ein Vertipper beim Einrichten wuerde sonst still gespeichert und sich
+    erst spaeter als leere Projektliste bzw. fehlgeschlagener Sync zeigen.
+    `/me/workspaces` ist der billigste authentifizierte Endpunkt und wird
+    bereits von TogglClient.workspaces() genutzt. Wirft TogglError, wenn
+    Toggl den Token ablehnt.
+    """
+    TogglClient(token).workspaces()

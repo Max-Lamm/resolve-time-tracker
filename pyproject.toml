@@ -6,6 +6,7 @@ dependencies = [
     "rumps>=0.4.0",
     "pyobjc-framework-Cocoa>=10.0",
     "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-ServiceManagement>=10.0",
     "httpx>=0.27",
     "keyring>=25.0",
 ]
@@ -14,7 +15,7 @@ dependencies = [
 rtt = "resolve_time_tracker.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0", "respx>=0.21"]
+dev = ["pytest>=8.0", "respx>=0.21", "pyinstaller>=6.10"]
 
 [build-system]
 requires = ["hatchling"]

@@ -8,7 +8,17 @@ This application requires **DaVinci Resolve Studio** (version TBD) to be install
 
 ## Installation
 
-### 1. Install and configure
+### For most people: just the app
+
+If you received `Resolve Time Tracker.dmg` (or `.app`) from someone else, see [`docs/RECIPIENT_SETUP.md`](docs/RECIPIENT_SETUP.md) — drag it into `/Applications`, double-click, done. No terminal needed. That guide also covers the one-time Gatekeeper warning that shows up because the app isn't notarized yet.
+
+### For development
+
+Run it straight from the source tree, no build step needed:
+
+```bash
+uv run rtt menubar
+```
 
 First, verify that Resolve Studio is installed and can be accessed via the Python API:
 
@@ -19,14 +29,6 @@ PYTHONPATH="$RESOLVE_SCRIPT_API/Modules" \
 uv run python scripts/smoke_resolve.py
 ```
 
-Then install the menubar app as a launch agent:
-
-```bash
-make install
-```
-
-This will start the app automatically on login and register it with launchd.
-
 ### 2. Everything else happens in the menubar
 
 Resolve usually fills most of the menubar, so the app shows a single colored circle there: 🟢 while tracking, 🟡 while idle or paused, ⚪ when nothing is being tracked (Resolve closed, or open without a project). Click it for the full menu:
@@ -35,7 +37,7 @@ Resolve usually fills most of the menubar, so the app shows a single colored cir
 - **Zuordnen** — one submenu entry per Resolve project you've worked in. Each opens your active Toggl projects (archived ones are filtered out); clicking one maps it, and a checkmark shows the current mapping so you can correct it later. **Neues Toggl-Projekt anlegen…** creates a new Toggl project on the spot and maps it immediately. Projects you never got around to mapping aren't left behind either — see the sync note below.
 - **Jetzt synchronisieren** — pushes finished, unsynced segments to Toggl right away, instead of waiting for the automatic 10-minute sync.
 - **Pause** — stops tracking until you resume it, independent of Resolve's own state.
-- **Beim Login starten** — toggles the launch agent on or off for future logins (via `launchctl enable`/`disable`); the app keeps running either way. Disabled until `make install` has registered the agent once.
+- **Beim Login starten** — registers or unregisters the app as a login item (via `SMAppService`); the app keeps running either way, this only affects future logins.
 - **Log oeffnen** — opens the log file for troubleshooting.
 
 There's only one Toggl workspace to worry about for most setups: the app detects it automatically on first use and remembers it. If your account has more than one workspace, set `default_workspace_id` under `[toggl]` in the config file to pick one explicitly.
@@ -44,15 +46,14 @@ A Resolve project that's never been mapped doesn't get skipped on sync anymore: 
 
 The CLI equivalents (`rtt token`, `rtt map`, `rtt sync`, `rtt status`) still work and are useful for scripting or headless setups (see `uv run rtt --help`), but the menubar is the primary way to use the app day to day.
 
-### 3. Optional: a clickable app icon
-
-`make install` already means you never touch the CLI day to day — the launch agent starts the tracker automatically on login. If you'd rather start it manually sometimes (or don't want the launch agent at all), run:
+### 3. Building the distributable app
 
 ```bash
-make app
+make bundle   # -> dist/Resolve Time Tracker.app
+make dmg      # -> dist/Resolve Time Tracker.dmg, for handing to someone else
 ```
 
-This assembles `dist/Resolve Time Tracker.app` directly (a `.app` bundle is just a folder with a script and an `Info.plist`, no packaging tool needed — and nothing gets frozen, so it can't drift out of sync with the interpreter DaVinci Resolve's scripting API expects). Drag it into `/Applications` (or leave it in `dist/`) and double-click to start. It's a manual alternative to the launch agent, not a replacement for it: starting it while the launch agent is already running is refused with a native "already running" alert, since two tracking processes writing to the same database at once could create conflicting segments.
+`make bundle` uses PyInstaller (see `packaging/ResolveTimeTracker.spec`) to produce a self-contained `.app` with its own Python interpreter — no venv, no Homebrew, no LaunchAgent involved on the recipient's machine. It's ad-hoc signed (required for arm64 to run at all) but not notarized, hence the Gatekeeper warning covered in `docs/RECIPIENT_SETUP.md`.
 
 ## Data Storage
 
@@ -98,20 +99,12 @@ To adjust idle behavior, modify `idle_threshold_seconds` (how long inactivity mu
 
 ## Uninstallation
 
-To remove the launch agent and stop automatic startup:
-
-```bash
-make uninstall
-```
-
-This removes the launchd entry but preserves the database and configuration for potential re-installation later.
+Turn off **Beim Login starten** in the menu if it's on, quit the app (**Beenden**), then move `Resolve Time Tracker.app` to the Trash. The database and config under `~/Library/Application Support/resolve-time-tracker/` and `~/.config/resolve-time-tracker/` are left in place in case you reinstall later; delete them by hand if you want a clean slate.
 
 ## Troubleshooting
-
-To view logs from the running application:
 
 ```bash
 make logs
 ```
 
-This streams the application log in real-time, useful for debugging connection issues or monitoring activity.
+streams `~/Library/Logs/resolve-time-tracker.log` in real-time (works whether the app was started from the bundle or via `uv run rtt menubar`), useful for debugging connection issues or monitoring activity. The menu's **Log oeffnen** item opens the same file.

@@ -8,13 +8,12 @@ Dauer, Zuordnung, Login-Autostart -- steckt im Klappmenue.
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 
 import rumps
+from ServiceManagement import SMAppService, SMAppServiceStatusEnabled
 
 from . import config as cfg
 from .runner import RunnerStatus
@@ -25,7 +24,10 @@ from .workspace import resolve_workspace_id
 
 log = logging.getLogger(__name__)
 
-LAUNCH_AGENT_LABEL = "com.monacoframe.resolve-time-tracker"
+# Marker in der meta-Tabelle (siehe store.py, gleiches Muster wie in
+# workspace.py): solange er fehlt, ist das der erste Start der App auf
+# diesem Rechner, und der Setup-Assistent laeuft automatisch an.
+SETUP_WIZARD_META_KEY = "setup_wizard_completed"
 
 _TRACKING_STATES = (TrackerState.ACTIVE, TrackerState.PENDING_IDLE)
 _PAUSED_STATES = (TrackerState.PAUSED_IDLE, TrackerState.PAUSED_MANUAL)
@@ -62,9 +64,15 @@ def format_status_line(status: RunnerStatus) -> str:
     text = _STATUS_TEXT.get(status.tracker_state)
     if text is not None:
         return text
-    # NO_RESOLVE: zwei Gruende, die der Nutzer unterscheiden koennen muss.
-    if not status.resolve_connected:
+    # NO_RESOLVE: drei Gruende, die der Nutzer unterscheiden koennen muss.
+    # Der haeufigste Stolperstein bei einem frisch eingerichteten Empfaenger
+    # ist der mittlere: Resolve laeuft, aber External Scripting steht noch
+    # auf None statt Local -- ohne diese Unterscheidung saehe das genauso
+    # aus wie "Resolve ist zu" und fuehrt in die Irre.
+    if not status.resolve_app_running:
         return "Resolve laeuft nicht"
+    if not status.resolve_connected:
+        return "Resolve-Scripting nicht aktiviert"
     return "Kein Projekt offen"
 
 
@@ -72,19 +80,6 @@ def format_header(status: RunnerStatus) -> str:
     if status.is_running and status.project:
         return f"{format_title(status)} {status.project}  {format_duration(status.current_seconds)}"
     return f"{format_title(status)} {format_status_line(status)}"
-
-
-def _is_service_disabled(output: str, label: str) -> bool:
-    """Parst `launchctl print-disabled gui/<uid>`. Fehlt das Label, ist der Dienst
-
-    nicht deaktiviert (launchd fuehrt nur explizit abgeschaltete Dienste auf).
-    """
-    needle = f'"{label}"'
-    for line in output.splitlines():
-        line = line.strip()
-        if line.startswith(needle):
-            return line.endswith("=> disabled")
-    return False
 
 
 def _project_menu_entries(
@@ -112,10 +107,6 @@ def _mapping_signature(
     )
 
 
-def _launch_agent_plist_path() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
-
-
 class TrackerApp(rumps.App):
     def __init__(self) -> None:
         super().__init__("⚪", quit_button=None)
@@ -134,6 +125,10 @@ class TrackerApp(rumps.App):
         self._header_item = rumps.MenuItem("⚪ Resolve laeuft nicht")
         self._today_item = rumps.MenuItem("Heute gesamt: 0:00")
         self._status_item = rumps.MenuItem("Status: Resolve laeuft nicht")
+        self._scripting_help_item = rumps.MenuItem(
+            "Wie aktiviere ich das?", callback=self._show_scripting_help
+        )
+        self._scripting_help_item.hidden = True
         self._pause_item = rumps.MenuItem("Pause", callback=self._toggle_pause)
         self._map_item = rumps.MenuItem("Zuordnen")
         # rumps.MenuItem erzeugt sein Submenu (NSMenu) erst beim ersten add();
@@ -147,6 +142,7 @@ class TrackerApp(rumps.App):
             self._header_item,
             self._today_item,
             self._status_item,
+            self._scripting_help_item,
             None,
             self._pause_item,
             self._map_item,
@@ -155,6 +151,8 @@ class TrackerApp(rumps.App):
             self._token_item,
             self._autostart_item,
             rumps.MenuItem("Log oeffnen", callback=self._open_log),
+            rumps.MenuItem("Einrichtung erneut starten…", callback=self._run_setup_wizard),
+            None,
             rumps.MenuItem("Beenden", callback=self._quit),
         ]
 
@@ -168,6 +166,9 @@ class TrackerApp(rumps.App):
         self._start_toggl_projects_fetch()
         self._refresh()
 
+        if self._store.get_meta(SETUP_WIZARD_META_KEY) is None:
+            self._run_setup_wizard(None)
+
     def _on_tick(self, _timer) -> None:
         try:
             self._runner.tick_once()
@@ -178,10 +179,12 @@ class TrackerApp(rumps.App):
 
     def _refresh(self) -> None:
         status = self._runner.status()
+        status_line = format_status_line(status)
         self.title = format_title(status)
         self._header_item.title = format_header(status)
         self._today_item.title = f"Heute gesamt: {format_duration(status.today_seconds)}"
-        self._status_item.title = f"Status: {format_status_line(status)}"
+        self._status_item.title = f"Status: {status_line}"
+        self._scripting_help_item.hidden = status_line != "Resolve-Scripting nicht aktiviert"
         self._pause_item.title = "Fortsetzen" if self._runner.manual_pause else "Pause"
 
         self._refresh_mapping_menu()
@@ -229,27 +232,92 @@ class TrackerApp(rumps.App):
             return
         self._autostart_dirty = False
 
-        if not _launch_agent_plist_path().exists():
-            self._autostart_item.title = "Beim Login starten (erst 'make install')"
-            self._autostart_item.state = 0
-            return
-
         self._autostart_item.title = "Beim Login starten"
-        self._autostart_item.state = 0 if _autostart_disabled() else 1
+        self._autostart_item.state = 1 if _autostart_enabled() else 0
 
     def _toggle_pause(self, _sender) -> None:
         self._runner.manual_pause = not self._runner.manual_pause
         self._refresh()
 
     def _toggle_autostart(self, _sender) -> None:
-        if not _launch_agent_plist_path().exists():
-            rumps.notification(
-                "Resolve Time Tracker", "Noch nicht installiert", "Erst 'make install' ausfuehren."
-            )
-            return
-        _set_autostart_enabled(_autostart_disabled())  # aktuell aus -> jetzt an, und umgekehrt
+        _set_autostart_enabled(not _autostart_enabled())
         self._autostart_dirty = True
         self._refresh()
+
+    def _run_setup_wizard(self, _sender) -> None:
+        """Gefuehrter Ablauf fuer den ersten Start (und ueber das Menue jederzeit
+
+        wiederholbar). Jeder Schritt ist rein informativ oder per Abbrechen
+        uebersprungbar -- der Assistent darf nie feststecken, falls Resolve
+        fehlt oder jemand keinen Toggl-Token zur Hand hat.
+        """
+        rumps.alert(
+            title="Willkommen bei Resolve Time Tracker",
+            message=(
+                "Diese App erfasst automatisch, wie lange du an welchem "
+                "DaVinci-Resolve-Projekt arbeitest, und uebertraegt das nach Toggl."
+            ),
+        )
+        self._setup_wizard_check_resolve()
+        self._setup_wizard_offer_token()
+        self._setup_wizard_offer_autostart()
+        self._store.set_meta(SETUP_WIZARD_META_KEY, "1")
+
+    def _setup_wizard_check_resolve(self) -> None:
+        from .activity import is_resolve_running
+
+        # status() liest nur den zuletzt getickten Snapshot, ohne einen
+        # eigenen Tick waere der Assistent kurz nach dem Start faelschlich
+        # immer "Resolve laeuft nicht", selbst wenn Resolve laengst offen ist.
+        try:
+            self._runner.tick_once()
+        except Exception:
+            log.exception("Tick fuer den Setup-Check fehlgeschlagen")
+        status = self._runner.status()
+
+        if status.resolve_connected:
+            return
+        if not is_resolve_running():
+            rumps.alert(
+                title="DaVinci Resolve",
+                message=(
+                    "DaVinci Resolve Studio wurde nicht gefunden. Die kostenlose "
+                    "Version hat kein Scripting, Resolve Studio wird also "
+                    "benoetigt. Sobald Resolve laeuft, erkennt der Tracker das "
+                    "von selbst -- kein erneutes Einrichten noetig."
+                ),
+            )
+            return
+        self._show_scripting_help(None)
+
+    def _setup_wizard_offer_token(self) -> None:
+        if cfg.get_token() is not None:
+            return
+        choice = rumps.alert(
+            title="Toggl verbinden",
+            message=(
+                "Damit erfasste Zeit nach Toggl uebertragen wird, braucht die App "
+                "deinen Toggl-API-Token (Toggl-Profil > API Token). Jetzt einrichten?"
+            ),
+            ok="Weiter",
+            cancel="Ueberspringen",
+        )
+        if choice == 1:
+            self._set_token(None)
+
+    def _setup_wizard_offer_autostart(self) -> None:
+        if _autostart_enabled():
+            return
+        choice = rumps.alert(
+            title="Beim Login starten",
+            message="Soll der Tracker kuenftig automatisch starten, wenn du dich anmeldest?",
+            ok="Ja",
+            cancel="Nein",
+        )
+        if choice == 1:
+            _set_autostart_enabled(True)
+            self._autostart_dirty = True
+            self._refresh()
 
     def _set_token(self, _sender) -> None:
         response = rumps.Window(
@@ -261,7 +329,18 @@ class TrackerApp(rumps.App):
         ).run()
         if not response.clicked or not response.text.strip():
             return
-        cfg.set_token(response.text.strip())
+        token = response.text.strip()
+        from .toggl import check_token
+
+        try:
+            check_token(token)
+        except TogglError:
+            log.exception("Token von Toggl abgelehnt")
+            rumps.notification(
+                "Resolve Time Tracker", "Token abgelehnt", "Nicht gespeichert, Details im Log."
+            )
+            return
+        cfg.set_token(token)
         rumps.notification("Resolve Time Tracker", "Token gespeichert", "")
         self._start_toggl_projects_fetch()
 
@@ -380,6 +459,15 @@ class TrackerApp(rumps.App):
 
         return _callback
 
+    def _show_scripting_help(self, _sender) -> None:
+        rumps.alert(
+            title="Resolve-Scripting aktivieren",
+            message=(
+                "In DaVinci Resolve: Preferences (Cmd+,) -> System -> General -> "
+                '"External scripting using" auf "Local" stellen, dann Resolve neu starten.'
+            ),
+        )
+
     def _open_log(self, _sender) -> None:
         subprocess.run(["open", str(cfg.log_path())], check=False)
 
@@ -395,23 +483,20 @@ class TrackerApp(rumps.App):
         rumps.quit_application()
 
 
-def _autostart_disabled() -> bool:
-    result = subprocess.run(
-        ["launchctl", "print-disabled", f"gui/{os.getuid()}"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return _is_service_disabled(result.stdout, LAUNCH_AGENT_LABEL)
+def _autostart_enabled() -> bool:
+    return SMAppService.mainAppService().status() == SMAppServiceStatusEnabled
 
 
 def _set_autostart_enabled(enabled: bool) -> None:
-    # Bewusst enable/disable statt bootstrap/bootout: bootout wuerde den
-    # gerade laufenden Prozess beenden, der dieses Menue zeichnet. disable
-    # wirkt erst beim naechsten Login, "Beenden" bleibt der Weg, die App
-    # jetzt zu schliessen.
-    action = "enable" if enabled else "disable"
-    subprocess.run(["launchctl", action, f"gui/{os.getuid()}/{LAUNCH_AGENT_LABEL}"], check=False)
+    # register/unregister statt eines LaunchAgent-Plists: die App traegt sich
+    # damit selbst als Login-Item ein, ohne dass vorher etwas installiert
+    # worden sein muss (siehe SMAppService, macOS 13+). Wirkt erst beim
+    # naechsten Login, "Beenden" bleibt der Weg, die App jetzt zu schliessen.
+    service = SMAppService.mainAppService()
+    if enabled:
+        service.registerAndReturnError_(None)
+    else:
+        service.unregisterAndReturnError_(None)
 
 
 def run_menubar() -> int:

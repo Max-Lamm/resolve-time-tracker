@@ -6,7 +6,13 @@ import httpx
 import pytest
 import respx
 
-from resolve_time_tracker.toggl import BASE_URL, TogglClient, TogglError, TogglRateLimited
+from resolve_time_tracker.toggl import (
+    BASE_URL,
+    TogglClient,
+    TogglError,
+    TogglRateLimited,
+    check_token,
+)
 
 START = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
 
@@ -177,3 +183,22 @@ def test_network_errors_are_converted_to_toggl_error(client):
 
     with pytest.raises(TogglError):
         client.create_time_entry(111, 222, "Kunde_A", START, 60, [])
+
+
+@respx.mock
+def test_check_token_accepts_a_valid_token():
+    respx.get(f"{BASE_URL}/me/workspaces").mock(
+        return_value=httpx.Response(200, json=[{"id": 111, "name": "monacoframe"}])
+    )
+
+    check_token("gueltiger-token")  # wirft nicht
+
+
+@respx.mock
+def test_check_token_rejects_an_invalid_token():
+    respx.get(f"{BASE_URL}/me/workspaces").mock(
+        return_value=httpx.Response(403, text="Incorrect username and/or password")
+    )
+
+    with pytest.raises(TogglError):
+        check_token("falscher-token")

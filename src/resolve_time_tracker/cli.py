@@ -8,18 +8,20 @@ import logging
 import subprocess
 import time
 from datetime import datetime, timezone
+from logging.handlers import RotatingFileHandler
 
 from . import config as cfg
 from .runner import Runner, local_day_start
 from .singleton import AlreadyRunning, acquire_lock
 from .store import Store
+from .toggl import TogglError, check_token
 from .tracker import Tracker
 
 log = logging.getLogger(__name__)
 
 
 def build_runner(store: Store, config: cfg.Config) -> Runner:
-    from .activity import frontmost_bundle_id, seconds_since_input
+    from .activity import frontmost_bundle_id, is_resolve_running, seconds_since_input
     from .resolve_probe import ResolveProbe
 
     return Runner(
@@ -33,6 +35,7 @@ def build_runner(store: Store, config: cfg.Config) -> Runner:
         idle_source=seconds_since_input,
         frontmost_source=frontmost_bundle_id,
         config=config,
+        resolve_running_source=is_resolve_running,
     )
 
 
@@ -109,6 +112,11 @@ def cmd_token(_args) -> int:
     token = getpass.getpass("Toggl-API-Token (Profile > API Token): ").strip()
     if not token:
         print("Nichts eingegeben, abgebrochen.")
+        return 1
+    try:
+        check_token(token)
+    except TogglError as e:
+        print(f"Token von Toggl abgelehnt, nicht gespeichert: {e}")
         return 1
     cfg.set_token(token)
     print("Token in der Keychain abgelegt.")
@@ -188,8 +196,37 @@ def cmd_status(_args) -> int:
         store.close()
 
 
+def _configure_logging() -> None:
+    """Schreibt sowohl in eine rotierende Logdatei als auch auf stderr.
+
+    Vor dem eigenstaendigen App-Bundle fing das LaunchAgent-Plist stderr ab
+    und leitete es in die Logdatei um -- ohne LaunchAgent geht stderr im
+    Bundle ins Nichts, und "Log oeffnen" im Menue haette nichts zu zeigen.
+    Der Datei-Handler ist deshalb jetzt fest verdrahtet statt sich auf eine
+    aeussere Umleitung zu verlassen. Der Stream-Handler bleibt daneben
+    bestehen, damit `rtt daemon`/`rtt sync` im Terminal weiterhin live
+    mitlesbar sind. force=True, damit wiederholte main()-Aufrufe (Tests,
+    potenzielle Re-Entry) nicht auf einen laengst veralteten log_path()
+    aus einem frueheren Aufruf sitzen bleiben.
+    """
+    log_path = cfg.log_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+
+    file_handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3)
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
+    logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
+    # httpx loggt jede einzelne Anfrage auf INFO -- bei einer dauerhaft
+    # laufenden Menubar-App wuerde das die rotierende Logdatei schnell mit
+    # Rauschen fuellen und echte Fehler darin verstecken.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 def main(argv: list[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    _configure_logging()
     parser = argparse.ArgumentParser(prog="rtt", description="Resolve Time Tracker")
     subparsers = parser.add_subparsers(dest="command")
 
