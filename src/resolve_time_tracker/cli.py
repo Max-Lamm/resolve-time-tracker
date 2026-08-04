@@ -13,6 +13,8 @@ from .runner import Runner
 from .store import Store
 from .tracker import Tracker
 
+log = logging.getLogger(__name__)
+
 
 def build_runner(store: Store, config: cfg.Config) -> Runner:
     from .activity import frontmost_bundle_id, seconds_since_input
@@ -52,8 +54,11 @@ def cmd_daemon(_args) -> int:
     print("Tracker laeuft. Abbruch mit Strg-C.")
     try:
         while True:
-            runner.tick_once()
-            time.sleep(config.tick_seconds)
+            try:
+                runner.tick_once()
+                time.sleep(config.tick_seconds)
+            except Exception:
+                log.exception("Fehler beim Tick, fortfahren")
     except KeyboardInterrupt:
         return 0
     finally:
