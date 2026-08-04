@@ -13,7 +13,7 @@ Ziel ist ein Hintergrund-Dienst, der aus DaVinci Resolve Studio heraus automatis
 | Resolve-Variante | Nur Studio, externes Scripting erlaubt |
 | Form | macOS-Menubar-App, Python + `rumps`, per launchd beim Login |
 | Toggl | Lokale SQLite ist Wahrheit, fertige Einträge werden gepusht |
-| Aktiv-Definition | Resolve ist vorderste App UND (Input kürzlich ODER Playhead bewegt sich) |
+| Aktiv-Definition | Resolve ist vorderste App UND Input kürzlich (Playback-Signal per Live-Test verworfen, siehe unten) |
 | Projekt-Zuordnung | Mapping-Tabelle, unbekannte Projekte werden lokal getrackt und geparkt |
 
 ## Verifizierte technische Grundlagen
@@ -34,6 +34,8 @@ Die Python-Anbindung an Resolve ist auf macOS historisch die zickigste Stelle de
 - Dauer eines Poll-Zyklus in Millisekunden
 
 Damit stehen drei Dinge fest: welche Python-Version funktioniert, ob die Playback-Erkennung überhaupt möglich ist, und wie teuer ein Tick ist. Fällt der Timecode-Test durch, entfällt das Playback-Signal und `is_active` stützt sich nur auf Input. Das ist eine akzeptable Abwertung, muss aber vorher bekannt sein.
+
+**Ergebnis des Live-Tests (2026-08-04, gegen echtes Resolve Studio):** Verbindung, Projektname, Datenbank, Page und Timeline werden zuverlässig gelesen, Poll-Kosten liegen bei ca. 3,3 ms pro Zyklus. `GetCurrentTimecode()` bewegt sich während laufender Wiedergabe jedoch **nicht** zuverlässig, das ist eine bekannte Einschränkung der Resolve-Scripting-API: der Wert reflektiert die Playhead-Position bei Pause/Scrub, aktualisiert sich aber nicht in Echtzeit während aktiver Wiedergabe. Das Playback-Signal entfällt deshalb vollständig. `is_active` prüft ab jetzt ausschließlich Input-Aktualität, solange Resolve vorne ist. `ResolveSnapshot.timecode` bleibt als informatives Feld erhalten (zur Anzeige/Diagnose), fließt aber in keine Aktivitätsentscheidung mehr ein, und der Adapter poll't es nicht mehr selektiv nur wenn Resolve vorne ist (der Grund für diese Optimierung, Kosten für die Aktivitätsprüfung sparen, ist entfallen).
 
 ## Architektur
 
@@ -64,7 +66,9 @@ Nimmt pro Tick ein `Tick(now, snapshot, idle_seconds, frontmost)` und gibt Komma
 Aktivitätsregel pro Tick, `is_active` nur wenn alles zutrifft:
 1. `snapshot.connected` und `project_name` gesetzt
 2. `frontmost` ist Resolve
-3. `idle_seconds < input_grace` (Standard 30 s) **oder** Timecode hat sich seit letztem Tick geändert
+3. `idle_seconds < input_grace` (Standard 30 s)
+
+(Das ursprünglich vorgesehene Playback-Signal, Timecode-Änderung als Alternative zu Input, entfiel nach dem Live-Test in Schritt 0, siehe oben.)
 
 Zustände: `NO_RESOLVE`, `ACTIVE`, `PENDING_IDLE`, `PAUSED_IDLE`, `PAUSED_MANUAL`.
 
@@ -98,7 +102,7 @@ LaunchAgent `~/Library/LaunchAgents/com.monacoframe.resolve-time-tracker.plist` 
 
 ## Tests
 
-- `tracker.py`: der Schwerpunkt, TDD, synthetische Tick-Sequenzen ohne echte Uhr. Abgedeckte Fälle: durchgehende Arbeit, kurze Pause unter Schwelle (zählt mit), lange Pause (Rückschnitt), Projektwechsel mitten in der Arbeit, Resolve wird beendet während ein Segment offen ist, Playback ohne Maus (bleibt aktiv), Resolve läuft im Hintergrund während in Mail gearbeitet wird (inaktiv), manuelle Pause überstimmt alles.
+- `tracker.py`: der Schwerpunkt, TDD, synthetische Tick-Sequenzen ohne echte Uhr. Abgedeckte Fälle: durchgehende Arbeit, kurze Pause unter Schwelle (zählt mit), lange Pause (Rückschnitt), Projektwechsel mitten in der Arbeit, Resolve wird beendet während ein Segment offen ist, Resolve läuft im Hintergrund während in Mail gearbeitet wird (inaktiv), manuelle Pause überstimmt alles.
 - `store.py`: gegen temporäre SQLite, inklusive Wiederanlauf mit offenem Segment.
 - `syncer.py`: Verschmelzungslogik und Idempotenz gegen einen Fake-Toggl-Client.
 - `toggl.py`: gegen aufgezeichnete HTTP-Antworten (`responses`), inklusive 429-Pfad.
@@ -106,14 +110,13 @@ LaunchAgent `~/Library/LaunchAgents/com.monacoframe.resolve-time-tracker.plist` 
 
 ## Verifikation Ende-zu-Ende
 
-1. `scripts/smoke_resolve.py` bei laufendem Resolve, Timecode ändert sich während Playback.
+1. `scripts/smoke_resolve.py` bei laufendem Resolve. (Bereits durchgeführt, siehe Ergebnis oben: Playback-Signal entfällt.)
 2. `pytest` grün.
 3. Daemon im Vordergrund starten, Resolve öffnen, ein Projekt laden. Menubar zeigt Projektnamen und laufende Zeit.
 4. Fünf Minuten in Mail arbeiten, zurückkommen. In der DB muss das Segment auf den Zeitpunkt vor dem Wechsel zurückgeschnitten sein, nicht durchlaufen.
-5. Playback starten, Hände weg, zwei Minuten warten. Segment läuft weiter.
-6. Projekt in Resolve wechseln. Zwei getrennte Segmente in der DB.
-7. Toggl-Push gegen einen Testworkspace, danach der Eintrag in Toggl mit korrekter Dauer, Projekt und Tags. Zweiter Push-Lauf legt keinen Duplikat-Eintrag an.
-8. Daemon während offenem Segment mit `kill -9` beenden, neu starten. Das Segment ist sauber begrenzt, keine Endlosdauer.
+5. Projekt in Resolve wechseln. Zwei getrennte Segmente in der DB.
+6. Toggl-Push gegen einen Testworkspace, danach der Eintrag in Toggl mit korrekter Dauer, Projekt und Tags. Zweiter Push-Lauf legt keinen Duplikat-Eintrag an.
+7. Daemon während offenem Segment mit `kill -9` beenden, neu starten. Das Segment ist sauber begrenzt, keine Endlosdauer.
 
 ## Bewusst nicht dabei (YAGNI)
 
