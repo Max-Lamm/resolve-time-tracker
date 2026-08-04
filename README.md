@@ -52,15 +52,35 @@ This interactive command walks you through selecting which Toggl project and wor
 Time tracking data and configuration are stored in:
 
 - **Database:** `~/Library/Application Support/resolve-time-tracker/tracker.db`
-- **Config:** `~/Library/Application Support/resolve-time-tracker/config.json`
+- **Config:** `~/.config/resolve-time-tracker/config.toml`
 - **Logs:** `~/Library/Logs/resolve-time-tracker.log`
 
 ## Configuration
 
-Idle behavior can be adjusted by editing `config.json`. The following settings are available:
+The application stores configuration in `~/.config/resolve-time-tracker/config.toml`. This file is created automatically on first run with sensible defaults. You can edit it to adjust behavior:
 
-- `idle_threshold_seconds`: Duration (in seconds) of inactivity in Resolve before an active segment is closed. Default is typically 300 seconds (5 minutes).
-- `max_segment_duration_seconds`: Maximum duration for a continuous segment before it is split, useful for long sessions without breaks.
+```toml
+[tracking]
+# How often to poll for active timeline changes (seconds)
+tick_seconds = 5
+
+# Duration after last user input that counts as still active (seconds)
+input_grace_seconds = 30
+
+# Duration of inactivity required to close a segment (seconds)
+idle_threshold_seconds = 300
+
+[sync]
+# Gap between segments small enough to merge into one Toggl entry (seconds)
+merge_gap_seconds = 600
+auto_push = true
+
+[toggl]
+# Default workspace ID (0 = not set)
+default_workspace_id = 0
+```
+
+To adjust idle behavior, modify `idle_threshold_seconds` (how long inactivity must persist before closing a segment) and `input_grace_seconds` (how long after user input is still considered active work).
 
 ## Important Notes
 
