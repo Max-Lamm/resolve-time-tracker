@@ -1,0 +1,29 @@
+[project]
+name = "resolve-time-tracker"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "rumps>=0.4.0",
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+    "httpx>=0.27",
+    "keyring>=25.0",
+]
+
+[project.scripts]
+rtt = "resolve_time_tracker.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "respx>=0.21"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/resolve_time_tracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "." muss mit rein, weil spaetere Tests Hilfsfunktionen aus tests.test_tracker_basics importieren.
+pythonpath = ["src", "."]

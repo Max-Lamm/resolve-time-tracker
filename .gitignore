@@ -1,0 +1,9 @@
+.superpowers/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+*.db
+*.db-wal
+*.db-shm

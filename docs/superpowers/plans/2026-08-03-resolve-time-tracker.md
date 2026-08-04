@@ -244,11 +244,13 @@ git commit -m "chore: Projektgeruest und Resolve-Machbarkeitspruefung"
 **Interfaces:**
 - Consumes: nichts
 - Produces:
-  - `ResolveSnapshot(connected: bool, project_name: str | None, database_name: str | None, page: str | None, timeline_name: str | None, timecode: str | None)`, alle Felder außer `connected` mit Default `None`
+  - `ResolveSnapshot(connected: bool, project_name: str | None, database_name: str | None, page: str | None, timeline_name: str | None, timecode: str | None)`, alle Felder außer `connected` mit Default `None`. `timecode` ist rein informativ (Anzeige/Diagnose) und fließt in keine Aktivitätsentscheidung ein.
   - `Tick(now: datetime, snapshot: ResolveSnapshot, idle_seconds: float, frontmost_bundle_id: str | None, manual_pause: bool = False)`
   - `is_resolve_frontmost(bundle_id: str | None) -> bool`
-  - `is_active(tick: Tick, previous_timecode: str | None, input_grace_seconds: float) -> bool`
+  - `is_active(tick: Tick, input_grace_seconds: float) -> bool`
   - Kommandos `OpenSegment(project: str, database: str | None, started_at: datetime, page: str | None)`, `TouchSegment(last_active_at: datetime, page: str | None)`, `CloseSegment(ended_at: datetime)`
+
+**Hinweis zum Live-Test (Schritt 0):** `GetCurrentTimecode()` aktualisiert sich laut Live-Test gegen echtes Resolve Studio (2026-08-04) während aktiver Wiedergabe nicht zuverlässig per Skript-Poll (bekannte API-Einschränkung). Das ursprünglich vorgesehene Playback-Signal (Timecode-Änderung als Alternative zu Input) entfällt deshalb vollständig. `is_active` prüft ausschließlich Input-Aktualität, solange Resolve vorne ist.
 
 - [ ] **Schritt 1: Failing tests schreiben**
 
@@ -276,7 +278,6 @@ def make_tick(
     project="Kunde_Film",
     idle=1.0,
     frontmost=RESOLVE_BUNDLE,
-    timecode="01:00:00:00",
     manual_pause=False,
 ):
     snapshot = ResolveSnapshot(
@@ -285,7 +286,7 @@ def make_tick(
         database_name="Local",
         page="color",
         timeline_name="v1",
-        timecode=timecode,
+        timecode="01:00:00:00",
     )
     return Tick(
         now=NOW,
@@ -310,44 +311,33 @@ def test_resolve_frontmost_matches_by_prefix(bundle_id, expected):
 
 
 def test_active_when_resolve_frontmost_and_recent_input():
-    assert is_active(make_tick(idle=5.0), previous_timecode=None, input_grace_seconds=30) is True
+    assert is_active(make_tick(idle=5.0), input_grace_seconds=30) is True
 
 
 def test_inactive_when_another_app_is_frontmost():
     tick = make_tick(frontmost="com.apple.mail", idle=1.0)
-    assert is_active(tick, previous_timecode=None, input_grace_seconds=30) is False
+    assert is_active(tick, input_grace_seconds=30) is False
 
 
-def test_inactive_when_input_is_stale_and_timecode_unchanged():
-    tick = make_tick(idle=120.0, timecode="01:00:00:00")
-    assert is_active(tick, previous_timecode="01:00:00:00", input_grace_seconds=30) is False
-
-
-def test_active_when_input_is_stale_but_timecode_moved():
-    tick = make_tick(idle=120.0, timecode="01:00:04:12")
-    assert is_active(tick, previous_timecode="01:00:00:00", input_grace_seconds=30) is True
-
-
-def test_timecode_signal_ignored_when_no_previous_value():
-    # Erster Tick nach Rueckkehr aus einer anderen App: es gibt keinen Vergleichswert,
-    # der Sprung darf nicht faelschlich als Aktivitaet gelten.
-    tick = make_tick(idle=120.0, timecode="02:00:00:00")
-    assert is_active(tick, previous_timecode=None, input_grace_seconds=30) is False
+def test_inactive_when_input_is_stale():
+    # Kein Playback-Signal mehr als Alternative: abgelaufener Input heisst immer inaktiv.
+    tick = make_tick(idle=120.0)
+    assert is_active(tick, input_grace_seconds=30) is False
 
 
 def test_inactive_when_resolve_not_connected():
-    tick = make_tick(connected=False, project=None, timecode=None)
-    assert is_active(tick, previous_timecode=None, input_grace_seconds=30) is False
+    tick = make_tick(connected=False, project=None)
+    assert is_active(tick, input_grace_seconds=30) is False
 
 
 def test_inactive_when_no_project_open():
     tick = make_tick(project=None)
-    assert is_active(tick, previous_timecode=None, input_grace_seconds=30) is False
+    assert is_active(tick, input_grace_seconds=30) is False
 
 
 def test_manual_pause_overrides_everything():
     tick = make_tick(idle=0.0, manual_pause=True)
-    assert is_active(tick, previous_timecode=None, input_grace_seconds=30) is False
+    assert is_active(tick, input_grace_seconds=30) is False
 ```
 
 - [ ] **Schritt 2: Tests laufen lassen, Fehlschlag bestätigen**
@@ -418,28 +408,26 @@ def is_resolve_frontmost(bundle_id: str | None) -> bool:
     return bundle_id is not None and bundle_id.startswith(RESOLVE_BUNDLE_PREFIX)
 
 
-def is_active(tick: Tick, previous_timecode: str | None, input_grace_seconds: float) -> bool:
-    """Gearbeitet wird, wenn Resolve vorne ist und entweder Input kam oder Playback laeuft."""
+def is_active(tick: Tick, input_grace_seconds: float) -> bool:
+    """Gearbeitet wird, wenn Resolve vorne ist und kuerzlich Input kam.
+
+    Ein Playback-Signal (Timecode-Aenderung als Alternative zu Input) war urspruenglich
+    vorgesehen, entfaellt aber: GetCurrentTimecode() aktualisiert sich laut Live-Test
+    waehrend aktiver Wiedergabe nicht zuverlaessig per Skript-Poll.
+    """
     if tick.manual_pause:
         return False
     if not tick.snapshot.connected or not tick.snapshot.project_name:
         return False
     if not is_resolve_frontmost(tick.frontmost_bundle_id):
         return False
-    if tick.idle_seconds < input_grace_seconds:
-        return True
-    # Playback zaehlt als Arbeit, aber nur wenn es einen echten Vergleichswert gibt.
-    return (
-        previous_timecode is not None
-        and tick.snapshot.timecode is not None
-        and tick.snapshot.timecode != previous_timecode
-    )
+    return tick.idle_seconds < input_grace_seconds
 ```
 
 - [ ] **Schritt 4: Tests laufen lassen, Erfolg bestätigen**
 
 Run: `uv run pytest tests/test_activity_rule.py -v`
-Expected: PASS, 12 Tests
+Expected: PASS, 9 Tests
 
 - [ ] **Schritt 5: Committen**
 
@@ -573,7 +561,6 @@ from .models import (
     Tick,
     TouchSegment,
     is_active,
-    is_resolve_frontmost,
 )
 
 
@@ -599,7 +586,6 @@ class Tracker:
         self._state = TrackerState.NO_RESOLVE
         self._current_project: str | None = None
         self._last_active_at: datetime | None = None
-        self._previous_timecode: str | None = None
 
     @property
     def state(self) -> TrackerState:
@@ -614,19 +600,9 @@ class Tracker:
         return self._last_active_at
 
     def tick(self, t: Tick) -> list[Command]:
-        active = is_active(t, self._previous_timecode, self.input_grace_seconds)
-        self._remember_timecode(t)
-
-        if active:
+        if is_active(t, self.input_grace_seconds):
             return self._handle_active(t)
         return self._handle_inactive(t)
-
-    def _remember_timecode(self, t: Tick) -> None:
-        # Der Timecode-Vergleich ist nur gueltig, solange Resolve durchgehend vorne ist.
-        if is_resolve_frontmost(t.frontmost_bundle_id):
-            self._previous_timecode = t.snapshot.timecode
-        else:
-            self._previous_timecode = None
 
     def _handle_active(self, t: Tick) -> list[Command]:
         project = t.snapshot.project_name
@@ -782,21 +758,13 @@ def test_work_resumes_with_a_new_segment_after_a_long_pause():
     ]
 
 
-def test_playback_without_input_keeps_the_segment_alive():
-    """Sichtung ist Arbeit: kein Input, aber der Playhead laeuft."""
+def test_idle_without_input_closes_even_while_playhead_could_move():
+    # Kein Playback-Signal mehr (siehe Task 2): abgelaufener Input schliesst immer,
+    # unabhaengig davon ob in Resolve etwas laeuft.
     tracker = Tracker(input_grace_seconds=30, idle_threshold_seconds=300)
-    tracker.tick(tick_at(0, timecode="01:00:00:00"))
-    commands = tracker.tick(tick_at(60, idle=60, timecode="01:01:00:00"))
-
-    assert commands == [TouchSegment(last_active_at=START + timedelta(seconds=60), page="color")]
-    assert tracker.state is TrackerState.ACTIVE
-
-
-def test_paused_playback_without_input_eventually_closes():
-    tracker = Tracker(input_grace_seconds=30, idle_threshold_seconds=300)
-    tracker.tick(tick_at(0, timecode="01:00:00:00"))
-    tracker.tick(tick_at(60, idle=60, timecode="01:00:00:00"))
-    commands = tracker.tick(tick_at(400, idle=400, timecode="01:00:00:00"))
+    tracker.tick(tick_at(0))
+    tracker.tick(tick_at(60, idle=60))
+    commands = tracker.tick(tick_at(400, idle=400))
 
     assert commands == [CloseSegment(ended_at=START)]
 ```
@@ -2138,9 +2106,11 @@ Diese beiden Module bekommen keine Unit-Tests. Sie sind dünne Übersetzer zu Sy
 **Interfaces:**
 - Consumes: `models.ResolveSnapshot`
 - Produces:
-  - `ResolveProbe()` mit `poll(include_timecode: bool) -> ResolveSnapshot`
+  - `ResolveProbe()` mit `poll() -> ResolveSnapshot`
   - `seconds_since_input() -> float`
   - `frontmost_bundle_id() -> str | None`
+
+**Hinweis zum Live-Test:** Der ursprünglich geplante `include_timecode`-Parameter (Timecode nur pollen, wenn Resolve vorne ist, um Kosten für die Aktivitätsprüfung zu sparen) entfällt, weil das Playback-Signal in Task 2 komplett gestrichen wurde. `poll()` liest Timecode/Timeline jetzt immer mit, wenn eine Timeline offen ist — laut Live-Test kostet ein voller Poll-Zyklus ohnehin nur ca. 3,3 ms.
 
 - [ ] **Schritt 1: `activity.py` implementieren**
 
@@ -2232,7 +2202,7 @@ class ResolveProbe:
             self._resolve = None
         return self._resolve
 
-    def poll(self, include_timecode: bool = True) -> ResolveSnapshot:
+    def poll(self) -> ResolveSnapshot:
         resolve = self._connect()
         if resolve is None:
             return DISCONNECTED
@@ -2245,11 +2215,10 @@ class ResolveProbe:
 
             timecode = None
             timeline_name = None
-            if include_timecode:
-                timeline = project.GetCurrentTimeline()
-                if timeline is not None:
-                    timeline_name = timeline.GetName()
-                    timecode = timeline.GetCurrentTimecode()
+            timeline = project.GetCurrentTimeline()
+            if timeline is not None:
+                timeline_name = timeline.GetName()
+                timecode = timeline.GetCurrentTimecode()
 
             return ResolveSnapshot(
                 connected=True,
@@ -2287,7 +2256,6 @@ def _database_name(manager) -> str | None:
 import time
 
 from resolve_time_tracker.activity import frontmost_bundle_id, seconds_since_input
-from resolve_time_tracker.models import is_resolve_frontmost
 from resolve_time_tracker.resolve_probe import ResolveProbe
 
 
@@ -2295,7 +2263,7 @@ def main() -> None:
     probe = ResolveProbe()
     for _ in range(10):
         bundle = frontmost_bundle_id()
-        snapshot = probe.poll(include_timecode=is_resolve_frontmost(bundle))
+        snapshot = probe.poll()
         print(
             f"idle={seconds_since_input():6.1f}s  vorne={bundle}  "
             f"resolve={snapshot.connected}  projekt={snapshot.project_name}  "
@@ -2312,7 +2280,7 @@ if __name__ == "__main__":
 
 Run: `uv run python scripts/smoke_adapters.py`
 
-Expected: Zehn Zeilen. Während der Ausführung einmal in eine andere App wechseln und einmal die Hände von der Tastatur nehmen. Dabei muss `idle` steigen und `vorne` sich ändern. Bei laufendem Resolve-Playback muss `tc` sich fortschreiben, solange Resolve vorne ist.
+Expected: Zehn Zeilen. Während der Ausführung einmal in eine andere App wechseln und einmal die Hände von der Tastatur nehmen. Dabei muss `idle` steigen und `vorne` sich ändern. `tc` ist nur informativ (siehe Live-Test-Hinweis: Timecode bewegt sich während Playback nicht zuverlässig), keine Erwartung daran geknüpft.
 
 - [ ] **Schritt 5: Committen**
 
@@ -2368,7 +2336,7 @@ class FakeProbe:
             timecode="01:00:00:00",
         )
 
-    def poll(self, include_timecode=True):
+    def poll(self):
         return self.snapshot
 
 
@@ -2492,7 +2460,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from .config import Config
-from .models import CloseSegment, OpenSegment, Tick, TouchSegment, is_resolve_frontmost
+from .models import CloseSegment, OpenSegment, Tick, TouchSegment
 from .store import Store
 from .tracker import Tracker
 
@@ -2537,7 +2505,7 @@ class Runner:
 
     def tick_once(self) -> None:
         frontmost = self._frontmost_source()
-        snapshot = self._probe.poll(include_timecode=is_resolve_frontmost(frontmost))
+        snapshot = self._probe.poll()
         tick = Tick(
             now=self._clock(),
             snapshot=snapshot,
@@ -3177,19 +3145,18 @@ git commit -m "feat: LaunchAgent und Installationsziele"
 Nach Abschluss aller Tasks in dieser Reihenfolge durchgehen:
 
 1. `make test`, alle Tests grün.
-2. `uv run python scripts/smoke_resolve.py` bei laufendem Resolve, Timecode bewegt sich während Playback.
+2. `uv run python scripts/smoke_resolve.py` bei laufendem Resolve. (Bereits am 2026-08-04 gegen echtes Resolve Studio durchgeführt: Verbindung/Projekt/Page/Timeline funktionieren, Playback-Signal verworfen, siehe Task 2.)
 3. `uv run rtt token`, danach `uv run rtt map` gegen einen Testworkspace.
 4. `make install`, Menubar-Icon erscheint.
 5. In Resolve arbeiten, Menubar zeigt `● Zeit Projektname`.
 6. Fünf Minuten in Mail arbeiten, zurückkommen. `sqlite3 ~/Library/Application\ Support/resolve-time-tracker/tracker.db "select * from segments"` zeigt ein auf den Wechselzeitpunkt zurückgeschnittenes Segment, nicht ein durchlaufendes.
-7. Playback starten, Hände weg, zwei Minuten warten. Das Segment läuft weiter.
-8. Projekt in Resolve wechseln, zwei getrennte Segmente in der Datenbank.
-9. `uv run rtt sync`, danach der Eintrag in Toggl mit korrekter Dauer, Projekt und Page-Tags. Zweiter Lauf legt keinen Duplikat-Eintrag an.
-10. `pkill -9 -f resolve_time_tracker` während ein Segment offen ist, dann Neustart. Das Segment ist auf `last_active_at` begrenzt, keine Endlosdauer.
+7. Projekt in Resolve wechseln, zwei getrennte Segmente in der Datenbank.
+8. `uv run rtt sync`, danach der Eintrag in Toggl mit korrekter Dauer, Projekt und Page-Tags. Zweiter Lauf legt keinen Duplikat-Eintrag an.
+9. `pkill -9 -f resolve_time_tracker` während ein Segment offen ist, dann Neustart. Das Segment ist auf `last_active_at` begrenzt, keine Endlosdauer.
 
 ## Selbstprüfung des Plans
 
-- **Spec-Abdeckung:** Smoke-Test (Task 1), Aktiv-Definition inklusive Playback (Task 2/4), Zustandsmaschine mit Rückschnitt (Task 3 bis 5), SQLite-Segmente und Crash-Sicherheit (Task 6, Task 12), Projekt-Mapping mit Parken (Task 7, Task 13), Config und Keychain (Task 8), Toggl-Client mit Drosselung (Task 9), Verschmelzung und Idempotenz (Task 10), Adapter (Task 11), Menubar (Task 14), LaunchAgent (Task 15). Jede Zeile der Spec hat einen Task.
+- **Spec-Abdeckung:** Smoke-Test (Task 1), Aktiv-Definition (Task 2/4), Zustandsmaschine mit Rückschnitt (Task 3 bis 5), SQLite-Segmente und Crash-Sicherheit (Task 6, Task 12), Projekt-Mapping mit Parken (Task 7, Task 13), Config und Keychain (Task 8), Toggl-Client mit Drosselung (Task 9), Verschmelzung und Idempotenz (Task 10), Adapter (Task 11), Menubar (Task 14), LaunchAgent (Task 15). Jede Zeile der Spec hat einen Task.
 - **Platzhalter:** keine. Jeder Codeschritt enthält den tatsächlichen Code.
 - **Typkonsistenz:** `Segment`, `ProjectMapping`, `ResolveSnapshot`, `Tick`, `RunnerStatus`, `SegmentGroup` und `SyncResult` werden jeweils in genau einem Task definiert und danach mit denselben Feldnamen verwendet. `create_time_entry` hat in Task 9 (echter Client) und Task 10 (Fake) dieselbe Signatur.
-- **Bekannte Abhängigkeit:** Fällt der Timecode-Test in Task 1 durch, entfällt in Task 2 die Timecode-Bedingung und in Task 4 die beiden Playback-Tests. Alles Übrige bleibt.
+- **Aktualisierung nach Live-Test (2026-08-04):** Der Timecode-Test aus Task 1 ist durchgelaufen und ist negativ ausgefallen (Playback-Signal nicht nutzbar, bekannte Resolve-API-Einschränkung). Wie in der ursprünglichen Fassung vorgesehen wurden daraufhin Task 2 (keine Timecode-Bedingung mehr, `is_active` ohne `previous_timecode`-Parameter), Task 3 (kein `_previous_timecode`/`_remember_timecode` mehr in `Tracker`), Task 4 (die beiden Playback-Tests ersetzt durch einen Test, der zeigt dass abgelaufener Input immer schließt), und Task 11/12 (`ResolveProbe.poll()` ohne `include_timecode`-Parameter, immer wenn eine Timeline offen ist) entsprechend angepasst. Alles Übrige bleibt unverändert.
