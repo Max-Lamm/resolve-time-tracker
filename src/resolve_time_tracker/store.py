@@ -53,6 +53,13 @@ class Segment:
         return (end - self.started_at).total_seconds()
 
 
+@dataclass(frozen=True)
+class ProjectMapping:
+    resolve_project: str
+    toggl_workspace_id: int
+    toggl_project_id: int | None
+
+
 def _require_utc(value: datetime) -> datetime:
     """Enforce that datetime values are timezone-aware UTC.
 
@@ -143,6 +150,65 @@ class Store:
             (_dump(since),),
         ).fetchall()
         return [_row_to_segment(row) for row in rows]
+
+    def get_mapping(self, resolve_project: str) -> ProjectMapping | None:
+        row = self._conn.execute(
+            "SELECT * FROM project_map WHERE resolve_project = ?", (resolve_project,)
+        ).fetchone()
+        if row is None:
+            return None
+        return ProjectMapping(
+            resolve_project=row["resolve_project"],
+            toggl_workspace_id=row["toggl_workspace_id"],
+            toggl_project_id=row["toggl_project_id"],
+        )
+
+    def set_mapping(
+        self, resolve_project: str, workspace_id: int, project_id: int | None
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO project_map(resolve_project, toggl_workspace_id, toggl_project_id)"
+            " VALUES (?, ?, ?)"
+            " ON CONFLICT(resolve_project) DO UPDATE SET"
+            " toggl_workspace_id = excluded.toggl_workspace_id,"
+            " toggl_project_id = excluded.toggl_project_id",
+            (resolve_project, workspace_id, project_id),
+        )
+
+    def unmapped_projects(self) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT DISTINCT s.resolve_project FROM segments s"
+            " LEFT JOIN project_map m ON m.resolve_project = s.resolve_project"
+            " WHERE s.toggl_entry_id IS NULL AND m.resolve_project IS NULL"
+            " ORDER BY s.resolve_project"
+        ).fetchall()
+        return [row["resolve_project"] for row in rows]
+
+    def unsynced_segments(self, closed_before: datetime) -> list[Segment]:
+        rows = self._conn.execute(
+            "SELECT * FROM segments"
+            " WHERE ended_at IS NOT NULL AND toggl_entry_id IS NULL AND ended_at < ?"
+            " ORDER BY started_at",
+            (_dump(closed_before),),
+        ).fetchall()
+        return [_row_to_segment(row) for row in rows]
+
+    def mark_synced(
+        self, segment_ids: list[int], toggl_entry_id: int, synced_at: datetime
+    ) -> None:
+        placeholders = ",".join("?" for _ in segment_ids)
+        self._conn.execute(
+            f"UPDATE segments SET toggl_entry_id = ?, synced_at = ? WHERE id IN ({placeholders})",
+            (toggl_entry_id, _dump(synced_at), *segment_ids),
+        )
+
+    def totals_since(self, since: datetime) -> dict[str, float]:
+        totals: dict[str, float] = {}
+        for segment in self.segments_since(since):
+            totals[segment.resolve_project] = (
+                totals.get(segment.resolve_project, 0.0) + segment.duration_seconds
+            )
+        return totals
 
 
 def _row_to_segment(row: sqlite3.Row) -> Segment:
