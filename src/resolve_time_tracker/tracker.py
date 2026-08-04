@@ -99,6 +99,12 @@ class Tracker:
             return commands
 
         if self._state is TrackerState.ACTIVE:
+            assert self._last_active_at is not None
+            still_for = (t.now - self._last_active_at).total_seconds()
+            if still_for >= self.idle_threshold_seconds:
+                commands = self._close_open_segment()
+                self._state = TrackerState.PAUSED_IDLE
+                return commands
             self._state = TrackerState.PENDING_IDLE
             return []
 
