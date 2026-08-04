@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 
 from . import config as cfg
-from .runner import Runner
+from .runner import Runner, local_day_start
 from .store import Store
 from .tracker import Tracker
 
@@ -135,8 +135,8 @@ def cmd_status(_args) -> int:
     store = _open_store()
     try:
         now = datetime.now(timezone.utc)
-        day_start = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        totals = store.totals_since(day_start.astimezone(timezone.utc))
+        day_start = local_day_start(now)
+        totals = store.totals_since(day_start)
         print("Heute:")
         for project, seconds in sorted(totals.items(), key=lambda item: -item[1]):
             print(f"  {seconds / 3600:5.2f} h  {project}")

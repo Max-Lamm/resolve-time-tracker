@@ -63,10 +63,10 @@ class TrackerApp(rumps.App):
     def _on_tick(self, _timer) -> None:
         try:
             self._runner.tick_once()
+            self._refresh()
         except Exception:
             log.exception("Tick fehlgeschlagen")
             return
-        self._refresh()
 
     def _refresh(self) -> None:
         status = self._runner.status()

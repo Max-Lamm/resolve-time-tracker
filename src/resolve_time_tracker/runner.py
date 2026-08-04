@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Callable
 
 from .config import Config
@@ -13,6 +13,22 @@ from .store import Store
 from .tracker import Tracker
 
 log = logging.getLogger(__name__)
+
+
+def local_day_start(now: datetime, tz: tzinfo | None = None) -> datetime:
+    """Start of the calendar day containing `now`, in the given timezone (or the
+
+    real system's local timezone if tz is None), returned back in UTC.
+
+    This constructs local midnight as a real local-time value first (letting the
+    tzinfo resolve the correct offset for that day-instant), then converts to
+    UTC -- unlike a plain `now.astimezone().replace(hour=0, ...)`, it does not
+    reuse `now`'s UTC offset for a different instant, so it is correct across
+    DST transitions.
+    """
+    local_now = now.astimezone(tz)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -34,6 +50,7 @@ class Runner:
         idle_source: Callable[[], float],
         frontmost_source: Callable[[], str | None],
         config: Config,
+        local_tz: tzinfo | None = None,
     ) -> None:
         self._store = store
         self._tracker = tracker
@@ -42,6 +59,7 @@ class Runner:
         self._idle_source = idle_source
         self._frontmost_source = frontmost_source
         self._config = config
+        self._local_tz = local_tz
         self._open_segment_id: int | None = None
         self.manual_pause = False
 
@@ -88,8 +106,8 @@ class Runner:
             if open_segment
             else 0.0
         )
-        day_start = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
-        totals = self._store.totals_since(day_start.astimezone(timezone.utc))
+        day_start = local_day_start(now, self._local_tz)
+        totals = self._store.totals_since(day_start)
         return RunnerStatus(
             project=self._tracker.current_project if open_segment else None,
             is_running=open_segment is not None,

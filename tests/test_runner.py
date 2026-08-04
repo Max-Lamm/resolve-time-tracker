@@ -27,6 +27,12 @@ class FakeProbe:
         return self.snapshot
 
 
+# Fixed (not the real system) local timezone, so tests that touch
+# today_seconds are deterministic and not at the mercy of the host machine's
+# actual timezone.
+FIXED_LOCAL_TZ = timezone(timedelta(hours=2))
+
+
 @pytest.fixture
 def setup(tmp_path):
     store = Store(tmp_path / "tracker.db")
@@ -40,6 +46,7 @@ def setup(tmp_path):
         idle_source=lambda: state["idle"],
         frontmost_source=lambda: state["frontmost"],
         config=Config(),
+        local_tz=FIXED_LOCAL_TZ,
     )
     yield runner, store, probe, state
     store.close()
@@ -103,6 +110,45 @@ def test_status_reports_project_and_today_total(setup):
     assert status.project == "Kunde_A"
     assert status.is_running is True
     assert status.current_seconds == pytest.approx(120.0)
+    # today_seconds mirrors current_seconds here since the segment is still
+    # open and started well after local midnight (see the dedicated
+    # local_tz test below for the actual day-boundary computation).
+    assert status.today_seconds == pytest.approx(120.0)
+
+
+def test_status_reports_today_total_using_the_injected_local_timezone(tmp_path):
+    """The day boundary for `today_seconds` must follow the Runner's injected
+
+    `local_tz`, not the real host machine's timezone -- this makes the
+    boundary deterministic and testable (see final review: the previous
+    version of this test never actually asserted on today_seconds because the
+    correct value depended on the test machine's real local timezone).
+    """
+    store = Store(tmp_path / "tracker.db")
+    probe = FakeProbe()
+    # 2026-08-03T23:30 UTC == 2026-08-04T01:30 local (UTC+2) -- after local
+    # midnight, so the whole segment counts toward "today" in local time even
+    # though it started on the previous UTC calendar day.
+    late_start = datetime(2026, 8, 3, 23, 30, tzinfo=timezone.utc)
+    state = {"now": late_start, "idle": 1.0, "frontmost": RESOLVE}
+    runner = Runner(
+        store=store,
+        tracker=Tracker(idle_threshold_seconds=300),
+        probe=probe,
+        clock=lambda: state["now"],
+        idle_source=lambda: state["idle"],
+        frontmost_source=lambda: state["frontmost"],
+        config=Config(),
+        local_tz=FIXED_LOCAL_TZ,
+    )
+    runner.tick_once()
+    state["now"] = late_start + timedelta(seconds=90)
+    runner.tick_once()
+
+    status = runner.status()
+
+    assert status.today_seconds == pytest.approx(90.0)
+    store.close()
 
 
 def test_startup_closes_a_leftover_open_segment(tmp_path):

@@ -71,12 +71,28 @@ def sync(store: Store, client, now: datetime, merge_gap_seconds: float) -> SyncR
     result = SyncResult()
     # Fetch all unsynced segments closed so far, don't filter by cutoff yet
     pending = store.unsynced_segments(closed_before=now)
+    gap = timedelta(seconds=merge_gap_seconds)
+
+    # Only one segment can be open across the whole app at a time. If it exists
+    # and could still merge into a settled group of the same project, that
+    # group must be held back too -- otherwise it gets pushed alone now and the
+    # open segment (once closed) gets pushed again as a second, separate entry.
+    open_segment = store.current_open_segment()
 
     for group in merge_segments(pending, merge_gap_seconds):
         # Only push if the group has settled (last segment ended long enough ago)
         settle_time = now - group.ended_at
-        if settle_time < timedelta(seconds=merge_gap_seconds):
+        if settle_time < gap:
             # Group hasn't settled yet, hold it for the next sync run
+            continue
+
+        if (
+            open_segment is not None
+            and open_segment.resolve_project == group.project
+            and open_segment.started_at - group.ended_at <= gap
+        ):
+            # An open segment for the same project could still merge with this
+            # group once it closes. Hold the group back rather than fragment it.
             continue
 
         mapping = store.get_mapping(group.project)

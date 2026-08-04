@@ -195,3 +195,50 @@ def test_segments_within_merge_gap_are_not_fragmented_if_second_segment_is_recen
     # Verify the merged entry has both segments' duration
     assert client.calls[0]["duration_seconds"] == 1200
     assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=2100))) == 0
+
+
+def test_an_open_segment_of_the_same_project_holds_back_a_settled_group(store):
+    """A closed, settled group must not be pushed alone if a currently-open
+
+    segment for the SAME project started within the merge gap of the group's
+    end -- it could still merge with that segment once it closes. Pushing the
+    group now would defeat the merge feature on the everyday break/resume path.
+    """
+    # Closed, settled segment for Kunde_A: 0-600s.
+    add(store, "Kunde_A", 0, 600)
+    store.set_mapping("Kunde_A", 111, 222)
+
+    # User takes a break and resumes on the SAME project well within the merge
+    # gap (900s < 600s ended_at + 600s gap = 1200s), leaving a new open segment.
+    started = START + timedelta(seconds=900)
+    store.open_segment("Kunde_A", "Local", started, "color")
+
+    client = FakeToggl()
+
+    # Plenty of time has passed since the closed group settled.
+    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600)
+
+    assert result.pushed == 0
+    assert client.calls == []
+    assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=3000))) == 1
+
+
+def test_an_open_segment_of_a_different_project_does_not_hold_back_the_group(store):
+    """The hold-back is project-scoped: an open segment for a DIFFERENT
+
+    project must not block a settled group of the first project from being
+    pushed, even though only one segment is ever open at a time.
+    """
+    add(store, "Kunde_A", 0, 600)
+    store.set_mapping("Kunde_A", 111, 222)
+
+    started = START + timedelta(seconds=900)
+    store.open_segment("Kunde_B", "Local", started, "color")
+
+    client = FakeToggl()
+
+    result = sync(store, client, now=START + timedelta(seconds=3000), merge_gap_seconds=600)
+
+    assert result.pushed == 1
+    assert client.calls[0]["description"] == "Kunde_A"
+    assert len(store.unsynced_segments(closed_before=START + timedelta(seconds=3000))) == 0
