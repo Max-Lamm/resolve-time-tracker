@@ -6,7 +6,7 @@ from resolve_time_tracker.config import Config
 from resolve_time_tracker.models import ResolveSnapshot
 from resolve_time_tracker.runner import Runner
 from resolve_time_tracker.store import Store
-from resolve_time_tracker.tracker import Tracker
+from resolve_time_tracker.tracker import Tracker, TrackerState
 
 RESOLVE = "com.blackmagic-design.DaVinciResolveStudio"
 START = datetime(2026, 8, 3, 10, 0, tzinfo=timezone.utc)
@@ -149,6 +149,41 @@ def test_status_reports_today_total_using_the_injected_local_timezone(tmp_path):
 
     assert status.today_seconds == pytest.approx(90.0)
     store.close()
+
+
+def test_status_reports_the_tracker_state(setup):
+    runner, store, _, state = setup
+    assert runner.status().tracker_state is TrackerState.NO_RESOLVE
+
+    runner.tick_once()
+    assert runner.status().tracker_state is TrackerState.ACTIVE
+
+
+def test_status_reports_resolve_connectivity_and_project(setup):
+    runner, store, probe, state = setup
+    runner.tick_once()
+
+    status = runner.status()
+    assert status.resolve_connected is True
+    assert status.resolve_project_open is True
+
+
+def test_status_reports_resolve_disconnected_before_any_tick(setup):
+    runner, store, probe, state = setup
+
+    status = runner.status()
+    assert status.resolve_connected is False
+    assert status.resolve_project_open is False
+
+
+def test_status_reports_resolve_connected_without_a_project(setup):
+    runner, store, probe, state = setup
+    probe.snapshot = ResolveSnapshot(connected=True, project_name=None)
+    runner.tick_once()
+
+    status = runner.status()
+    assert status.resolve_connected is True
+    assert status.resolve_project_open is False
 
 
 def test_startup_closes_a_leftover_open_segment(tmp_path):

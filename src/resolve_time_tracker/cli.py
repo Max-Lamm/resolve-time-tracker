@@ -82,6 +82,8 @@ def cmd_token(_args) -> int:
 
 
 def cmd_map(_args) -> int:
+    from .workspace import resolve_workspace_id
+
     store = _open_store()
     try:
         unmapped = store.unmapped_projects()
@@ -90,11 +92,7 @@ def cmd_map(_args) -> int:
             return 0
 
         client = _client()
-        workspaces = client.workspaces()
-        print("Workspaces:")
-        for workspace in workspaces:
-            print(f"  {workspace['id']}  {workspace['name']}")
-        workspace_id = int(input("Workspace-ID: ").strip())
+        workspace_id = resolve_workspace_id(store, client, cfg.load_config())
         projects = client.projects(workspace_id)
 
         for resolve_project in unmapped:

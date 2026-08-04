@@ -27,25 +27,20 @@ make install
 
 This will start the app automatically on login and register it with launchd.
 
-### 2. Configure Toggl integration
+### 2. Everything else happens in the menubar
 
-Before syncing time entries to Toggl, you must obtain and store a Toggl API token:
+Resolve usually fills most of the menubar, so the app shows a single character there: `●` while tracking, `○` while idle or paused, `·` when Resolve isn't open. Click it for the full menu:
 
-```bash
-uv run rtt token
-```
+- **Toggl-Token einrichten…** — stores your Toggl API token in the macOS keychain. Only needed once.
+- **Zuordnen** — one submenu entry per Resolve project you've worked in. Each opens your active Toggl projects (archived ones are filtered out); clicking one maps it, and a checkmark shows the current mapping so you can correct it later. **Neues Toggl-Projekt anlegen…** creates a new Toggl project on the spot and maps it immediately.
+- **Jetzt synchronisieren** — pushes finished, unsynced segments to Toggl right away, instead of waiting for the automatic 10-minute sync.
+- **Pause** — stops tracking until you resume it, independent of Resolve's own state.
+- **Beim Login starten** — toggles the launch agent on or off for future logins (via `launchctl enable`/`disable`); the app keeps running either way. Disabled until `make install` has registered the agent once.
+- **Log oeffnen** — opens the log file for troubleshooting.
 
-This will prompt you for your Toggl API token and store it securely in the macOS keychain.
+There's only one Toggl workspace to worry about for most setups: the app detects it automatically on first use and remembers it. If your account has more than one workspace, set `default_workspace_id` under `[toggl]` in the config file to pick one explicitly.
 
-### 3. Map Resolve projects to Toggl workspaces and projects
-
-Create a mapping between your Resolve projects and Toggl projects:
-
-```bash
-uv run rtt map
-```
-
-This interactive command walks you through selecting which Toggl project and workspace each Resolve project should map to.
+The CLI equivalents (`rtt token`, `rtt map`, `rtt sync`, `rtt status`) still work and are useful for scripting or headless setups (see `uv run rtt --help`), but the menubar is the primary way to use the app day to day.
 
 ## Data Storage
 
@@ -76,7 +71,10 @@ merge_gap_seconds = 600
 auto_push = true
 
 [toggl]
-# Default workspace ID (0 = not set)
+# Workspace ID to use. Leave at 0 to auto-detect: the app resolves it the
+# first time it needs one (as long as your account has exactly one
+# workspace) and remembers it. Only set this explicitly if you have more
+# than one Toggl workspace.
 default_workspace_id = 0
 ```
 

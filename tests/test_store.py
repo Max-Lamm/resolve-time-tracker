@@ -119,3 +119,20 @@ def test_open_segment_rejects_non_utc_datetime(store):
     non_utc_dt = datetime(2026, 8, 3, 10, 0, tzinfo=timezone(timedelta(hours=2)))
     with pytest.raises(ValueError, match="Non-UTC datetime not allowed"):
         store.open_segment("Kunde_A", "Local", non_utc_dt, "color")
+
+
+def test_meta_roundtrip(store):
+    store.set_meta("toggl_workspace_id", "3578077")
+
+    assert store.get_meta("toggl_workspace_id") == "3578077"
+
+
+def test_meta_is_none_for_unknown_key(store):
+    assert store.get_meta("nichts_da") is None
+
+
+def test_setting_meta_twice_overwrites(store):
+    store.set_meta("toggl_workspace_id", "111")
+    store.set_meta("toggl_workspace_id", "222")
+
+    assert store.get_meta("toggl_workspace_id") == "222"

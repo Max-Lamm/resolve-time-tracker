@@ -102,6 +102,74 @@ def test_workspaces_and_projects_are_returned_as_lists(client):
 
 
 @respx.mock
+def test_projects_filters_to_active_by_default(client):
+    route = respx.get(f"{BASE_URL}/workspaces/111/projects").mock(
+        return_value=httpx.Response(200, json=[{"id": 222, "name": "Kunde A"}])
+    )
+
+    client.projects(111)
+
+    request = route.calls[0].request
+    assert request.url.params["active"] == "true"
+    assert request.url.params["per_page"] == "200"
+
+
+@respx.mock
+def test_projects_active_only_false_omits_the_filter(client):
+    route = respx.get(f"{BASE_URL}/workspaces/111/projects").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    client.projects(111, active_only=False)
+
+    assert "active" not in route.calls[0].request.url.params
+
+
+@respx.mock
+def test_projects_pages_through_full_result_pages(client):
+    page1 = [{"id": i, "name": f"P{i}"} for i in range(200)]
+    page2 = [{"id": 999, "name": "letzte Seite"}]
+    route = respx.get(f"{BASE_URL}/workspaces/111/projects")
+    route.side_effect = [
+        httpx.Response(200, json=page1),
+        httpx.Response(200, json=page2),
+    ]
+
+    result = client.projects(111)
+
+    assert len(result) == 201
+    assert result[-1]["name"] == "letzte Seite"
+    assert route.calls[0].request.url.params["page"] == "1"
+    assert route.calls[1].request.url.params["page"] == "2"
+
+
+@respx.mock
+def test_projects_stops_after_a_short_page(client):
+    page1 = [{"id": i, "name": f"P{i}"} for i in range(3)]
+    route = respx.get(f"{BASE_URL}/workspaces/111/projects").mock(
+        return_value=httpx.Response(200, json=page1)
+    )
+
+    result = client.projects(111)
+
+    assert len(result) == 3
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_create_project_posts_name_and_active(client):
+    route = respx.post(f"{BASE_URL}/workspaces/111/projects").mock(
+        return_value=httpx.Response(200, json={"id": 555, "name": "Neues Projekt", "active": True})
+    )
+
+    project = client.create_project(111, "Neues Projekt")
+
+    assert project["id"] == 555
+    body = json.loads(route.calls[0].request.content)
+    assert body == {"name": "Neues Projekt", "active": True}
+
+
+@respx.mock
 def test_network_errors_are_converted_to_toggl_error(client):
     respx.post(f"{BASE_URL}/workspaces/111/time_entries").mock(
         side_effect=httpx.ConnectError("Network unreachable")

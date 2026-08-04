@@ -30,7 +30,9 @@ merge_gap_seconds = 600
 auto_push = true
 
 [toggl]
-# 0 bedeutet: noch nicht gesetzt.
+# 0 bedeutet: automatisch ermitteln (nur moeglich, wenn genau ein Workspace
+# existiert -- der Tracker merkt sich das Ergebnis danach selbst). Nur bei
+# mehreren Workspaces hier explizit setzen.
 default_workspace_id = 0
 """
 
