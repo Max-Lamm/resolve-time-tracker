@@ -38,18 +38,18 @@ def test_duration_is_hours_and_minutes():
     assert format_duration(360000) == "100:00"
 
 
-def test_title_is_a_single_filled_dot_while_tracking():
-    assert format_title(status(tracker_state=TrackerState.ACTIVE)) == "●"
-    assert format_title(status(tracker_state=TrackerState.PENDING_IDLE)) == "●"
+def test_title_is_green_while_tracking():
+    assert format_title(status(tracker_state=TrackerState.ACTIVE)) == "🟢"
+    assert format_title(status(tracker_state=TrackerState.PENDING_IDLE)) == "🟢"
 
 
-def test_title_is_a_single_hollow_circle_while_idle_or_paused():
-    assert format_title(status(tracker_state=TrackerState.PAUSED_IDLE)) == "○"
-    assert format_title(status(tracker_state=TrackerState.PAUSED_MANUAL)) == "○"
+def test_title_is_yellow_while_idle_or_paused():
+    assert format_title(status(tracker_state=TrackerState.PAUSED_IDLE)) == "🟡"
+    assert format_title(status(tracker_state=TrackerState.PAUSED_MANUAL)) == "🟡"
 
 
-def test_title_is_a_middle_dot_without_resolve():
-    assert format_title(status(tracker_state=TrackerState.NO_RESOLVE)) == "·"
+def test_title_is_white_without_resolve():
+    assert format_title(status(tracker_state=TrackerState.NO_RESOLVE)) == "⚪"
 
 
 def test_status_line_covers_every_tracker_state():
@@ -86,12 +86,12 @@ def test_header_shows_project_and_duration_while_running():
             current_seconds=8100,
         )
     )
-    assert header == "● PowerGrades Project  2:15"
+    assert header == "🟢 PowerGrades Project  2:15"
 
 
 def test_header_falls_back_to_the_status_line_when_not_running():
     header = format_header(status(tracker_state=TrackerState.NO_RESOLVE, resolve_connected=False))
-    assert header == "· Resolve laeuft nicht"
+    assert header == "⚪ Resolve laeuft nicht"
 
 
 def test_is_service_disabled_reads_the_matching_line():

@@ -44,12 +44,18 @@ def format_duration(seconds: float) -> str:
 
 
 def format_title(status: RunnerStatus) -> str:
-    """Ein einziges Zeichen -- alles andere steht im Klappmenue."""
+    """Ein einziges farbiges Zeichen -- alles andere steht im Klappmenue.
+
+    Farbige Kreis-Emoji statt monochromer Zeichen: Gruen beim Tracken, Gelb
+    bei Pause, Weiss als Default (Resolve laeuft oder ist zu, aber es wird
+    gerade nicht getrackt). Emoji behalten ihre Farbe unabhaengig vom
+    Hell-/Dunkelmodus der Menueleiste.
+    """
     if status.tracker_state in _TRACKING_STATES:
-        return "●"
+        return "🟢"
     if status.tracker_state in _PAUSED_STATES:
-        return "○"
-    return "·"
+        return "🟡"
+    return "⚪"
 
 
 def format_status_line(status: RunnerStatus) -> str:
@@ -112,7 +118,7 @@ def _launch_agent_plist_path() -> Path:
 
 class TrackerApp(rumps.App):
     def __init__(self) -> None:
-        super().__init__("·", quit_button=None)
+        super().__init__("⚪", quit_button=None)
         self._config = cfg.load_config()
         self._store = Store(cfg.database_path())
 
@@ -125,7 +131,7 @@ class TrackerApp(rumps.App):
         self._mapping_signature: tuple | None = None
         self._autostart_dirty = True
 
-        self._header_item = rumps.MenuItem("· Resolve laeuft nicht")
+        self._header_item = rumps.MenuItem("⚪ Resolve laeuft nicht")
         self._today_item = rumps.MenuItem("Heute gesamt: 0:00")
         self._status_item = rumps.MenuItem("Status: Resolve laeuft nicht")
         self._pause_item = rumps.MenuItem("Pause", callback=self._toggle_pause)
@@ -274,6 +280,7 @@ class TrackerApp(rumps.App):
                 client,
                 now=datetime.now(timezone.utc),
                 merge_gap_seconds=self._config.merge_gap_seconds,
+                config=self._config,
             )
         except Exception:
             log.exception("Sync fehlgeschlagen")

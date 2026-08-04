@@ -17,6 +17,9 @@ from .toggl import TogglError
 
 META_KEY = "toggl_workspace_id"
 
+DEFAULT_PROJECT_META_KEY = "toggl_default_project_id"
+DEFAULT_PROJECT_NAME = "RESOLVE (Auto-Track)"
+
 
 class _WorkspaceSource(Protocol):
     def workspaces(self) -> list[dict[str, Any]]: ...
@@ -40,3 +43,26 @@ def resolve_workspace_id(store: Store, client: _WorkspaceSource, config: Config)
     workspace_id = int(workspaces[0]["id"])
     store.set_meta(META_KEY, str(workspace_id))
     return workspace_id
+
+
+def resolve_default_project_id(store: Store, client, workspace_id: int) -> int:
+    """Toggl-Projekt fuer Resolve-Projekte, die noch keine eigene Zuordnung haben.
+
+    Sucht per exaktem Namen unter den aktiven Projekten, legt es nur an, wenn
+    es wirklich fehlt (z. B. in einem frischen Workspace). Damit geht keine
+    Arbeitszeit mehr verloren, nur weil `rtt map` noch nicht ausgefuehrt wurde
+    -- Aufrufer soll die Zuordnung danach ueber store.set_mapping() festhalten,
+    damit sie sich spaeter ueber die Zuordnen-UI korrigieren laesst.
+    """
+    cached = store.get_meta(DEFAULT_PROJECT_META_KEY)
+    if cached is not None:
+        return int(cached)
+
+    for project in client.projects(workspace_id):
+        if project["name"] == DEFAULT_PROJECT_NAME:
+            store.set_meta(DEFAULT_PROJECT_META_KEY, str(project["id"]))
+            return int(project["id"])
+
+    created = client.create_project(workspace_id, DEFAULT_PROJECT_NAME)
+    store.set_meta(DEFAULT_PROJECT_META_KEY, str(created["id"]))
+    return int(created["id"])

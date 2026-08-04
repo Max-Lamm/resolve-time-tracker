@@ -120,6 +120,7 @@ def cmd_sync(_args) -> int:
             _client(),
             now=datetime.now(timezone.utc),
             merge_gap_seconds=config.merge_gap_seconds,
+            config=config,
         )
         print(f"Gepusht: {result.pushed}, fehlgeschlagen: {result.failed}")
         if result.skipped_unmapped:
