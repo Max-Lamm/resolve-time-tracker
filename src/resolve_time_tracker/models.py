@@ -58,6 +58,26 @@ def is_resolve_frontmost(bundle_id: str | None) -> bool:
     return bundle_id is not None and bundle_id.startswith(RESOLVE_BUNDLE_PREFIX)
 
 
+def is_project_loaded(
+    project_name: str | None,
+    timeline_count: int,
+    ignored_projects: tuple[str, ...],
+) -> bool:
+    """Ob wirklich an einem Projekt gearbeitet wird, statt nur an der Uebersicht zu stehen.
+
+    Resolve liefert in der Projektuebersicht ein Platzhalter-Projektobjekt
+    (typischerweise "Untitled Project", 0 Timelines). Der Timeline-Count allein
+    reicht nicht: ein frisch angelegtes echtes Projekt hat vor der ersten
+    Timeline ebenfalls 0. Nur die Kombination aus 0 Timelines und einem
+    ignorierten Namen gilt als "nicht wirklich offen".
+    """
+    if project_name is None:
+        return False
+    if timeline_count == 0 and project_name in ignored_projects:
+        return False
+    return True
+
+
 def is_active(tick: Tick, input_grace_seconds: float) -> bool:
     """Gearbeitet wird, wenn Resolve vorne ist und kuerzlich Input kam.
 

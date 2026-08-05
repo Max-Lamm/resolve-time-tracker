@@ -30,7 +30,7 @@ def build_runner(store: Store, config: cfg.Config) -> Runner:
             input_grace_seconds=config.input_grace_seconds,
             idle_threshold_seconds=config.idle_threshold_seconds,
         ),
-        probe=ResolveProbe(),
+        probe=ResolveProbe(ignored_projects=config.ignored_projects),
         clock=lambda: datetime.now(timezone.utc),
         idle_source=seconds_since_input,
         frontmost_source=frontmost_bundle_id,

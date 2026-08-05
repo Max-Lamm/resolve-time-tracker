@@ -58,6 +58,18 @@ def test_resuming_after_manual_pause_opens_a_new_segment():
     ]
 
 
+def test_project_closed_back_to_overview_closes_the_segment():
+    # Resolve bleibt verbunden, aber es ist kein Projekt mehr geladen (Uebersicht).
+    tracker = Tracker()
+    tracker.tick(tick_at(0, project="Kunde_A"))
+    tracker.tick(tick_at(60, project="Kunde_A"))
+    commands = tracker.tick(tick_at(120, project=None))
+
+    assert commands == [CloseSegment(ended_at=START + timedelta(seconds=60))]
+    assert tracker.state is TrackerState.NO_RESOLVE
+    assert tracker.current_project is None
+
+
 def test_resolve_quitting_during_a_pending_idle_closes_the_segment():
     tracker = Tracker(idle_threshold_seconds=300)
     tracker.tick(tick_at(0))

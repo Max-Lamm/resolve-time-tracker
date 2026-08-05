@@ -23,6 +23,10 @@ tick_seconds = 5
 input_grace_seconds = 30
 # So lange muss es still sein, bevor ein Segment geschlossen wird.
 idle_threshold_seconds = 300
+# Projektnamen, die ignoriert werden, solange das Projekt noch keine Timeline
+# hat (z.B. die Resolve-Projektuebersicht). Ein echtes Projekt mit diesem
+# Namen wird getrackt, sobald es eine Timeline hat.
+ignored_projects = ["Untitled Project"]
 
 [sync]
 # Segmente mit kleinerer Luecke werden zu einem Toggl-Eintrag verschmolzen.
@@ -45,6 +49,7 @@ class Config:
     merge_gap_seconds: float = 600.0
     auto_push: bool = True
     default_workspace_id: int | None = None
+    ignored_projects: tuple[str, ...] = ("Untitled Project",)
 
 
 def config_path() -> Path:
@@ -87,6 +92,7 @@ def load_config(path: Path | None = None) -> Config:
         merge_gap_seconds=float(sync.get("merge_gap_seconds", defaults.merge_gap_seconds)),
         auto_push=bool(sync.get("auto_push", defaults.auto_push)),
         default_workspace_id=workspace_id or None,
+        ignored_projects=tuple(tracking.get("ignored_projects", defaults.ignored_projects)),
     )
 
 

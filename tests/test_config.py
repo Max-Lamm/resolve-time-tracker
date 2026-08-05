@@ -42,3 +42,19 @@ def test_default_toml_template_parses_into_the_defaults(tmp_path):
     path.write_text(DEFAULT_CONFIG_TOML)
 
     assert load_config(path) == Config()
+
+
+def test_ignored_projects_defaults_to_the_untitled_placeholder(tmp_path):
+    path = tmp_path / "config.toml"
+    config = load_config(path)
+
+    assert config.ignored_projects == ("Untitled Project",)
+
+
+def test_ignored_projects_from_file_override_the_default(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[tracking]\nignored_projects = ["Untitled Project", "Testprojekt"]\n')
+
+    config = load_config(path)
+
+    assert config.ignored_projects == ("Untitled Project", "Testprojekt")

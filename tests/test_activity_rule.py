@@ -6,6 +6,7 @@ from resolve_time_tracker.models import (
     ResolveSnapshot,
     Tick,
     is_active,
+    is_project_loaded,
     is_resolve_frontmost,
 )
 
@@ -79,3 +80,47 @@ def test_inactive_when_no_project_open():
 def test_manual_pause_overrides_everything():
     tick = make_tick(idle=0.0, manual_pause=True)
     assert is_active(tick, input_grace_seconds=30) is False
+
+
+def test_project_overview_placeholder_is_not_loaded():
+    # Resolve liefert in der Projektuebersicht "Untitled Project" mit 0 Timelines.
+    assert (
+        is_project_loaded(
+            "Untitled Project", timeline_count=0, ignored_projects=("Untitled Project",)
+        )
+        is False
+    )
+
+
+def test_real_project_with_a_timeline_is_loaded():
+    assert (
+        is_project_loaded(
+            "Kunde_A", timeline_count=1, ignored_projects=("Untitled Project",)
+        )
+        is True
+    )
+
+
+def test_real_project_literally_named_like_the_placeholder_is_loaded_once_it_has_a_timeline():
+    assert (
+        is_project_loaded(
+            "Untitled Project", timeline_count=1, ignored_projects=("Untitled Project",)
+        )
+        is True
+    )
+
+
+def test_fresh_real_project_without_a_timeline_yet_is_loaded():
+    # Kein Timeline-Count-Blackout fuer echte, nur noch nicht umbenannte Projekte.
+    assert (
+        is_project_loaded("Kunde_B", timeline_count=0, ignored_projects=("Untitled Project",))
+        is True
+    )
+
+
+def test_no_project_at_all_is_not_loaded():
+    assert is_project_loaded(None, timeline_count=0, ignored_projects=()) is False
+
+
+def test_empty_ignore_list_never_filters_by_name():
+    assert is_project_loaded("Untitled Project", timeline_count=0, ignored_projects=()) is True

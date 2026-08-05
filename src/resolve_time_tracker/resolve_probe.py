@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import os
 
-from .models import ResolveSnapshot
+from .models import ResolveSnapshot, is_project_loaded
 
 log = logging.getLogger(__name__)
 
@@ -35,9 +35,10 @@ def ensure_environment() -> None:
 
 
 class ResolveProbe:
-    def __init__(self) -> None:
+    def __init__(self, ignored_projects: tuple[str, ...] = ()) -> None:
         ensure_environment()
         self._resolve = None
+        self._ignored_projects = ignored_projects
 
     def _connect(self):
         if self._resolve is not None:
@@ -62,6 +63,11 @@ class ResolveProbe:
             if project is None:
                 return ResolveSnapshot(connected=True)
 
+            project_name = project.GetName()
+            timeline_count = project.GetTimelineCount()
+            if not is_project_loaded(project_name, timeline_count, self._ignored_projects):
+                return ResolveSnapshot(connected=True)
+
             timecode = None
             timeline_name = None
             timeline = project.GetCurrentTimeline()
@@ -71,7 +77,7 @@ class ResolveProbe:
 
             return ResolveSnapshot(
                 connected=True,
-                project_name=project.GetName(),
+                project_name=project_name,
                 database_name=_database_name(manager),
                 page=resolve.GetCurrentPage(),
                 timeline_name=timeline_name,

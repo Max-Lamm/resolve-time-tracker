@@ -78,6 +78,11 @@ input_grace_seconds = 30
 # Duration of inactivity required to close a segment (seconds)
 idle_threshold_seconds = 300
 
+# Project names to ignore while they have no timeline yet (e.g. Resolve's
+# project overview, which reports "Untitled Project"). A real project keeping
+# this name is still tracked once it has a timeline.
+ignored_projects = ["Untitled Project"]
+
 [sync]
 # Gap between segments small enough to merge into one Toggl entry (seconds)
 merge_gap_seconds = 600
