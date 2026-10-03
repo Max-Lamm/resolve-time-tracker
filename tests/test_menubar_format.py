@@ -156,17 +156,30 @@ def test_project_menu_entries_none_selected_when_unmapped():
 
 
 def test_mapping_signature_changes_when_a_mapping_changes():
-    base = _mapping_signature(["Kunde_A"], {"Kunde_A": None}, [{"id": 1, "name": "X"}])
-    changed = _mapping_signature(["Kunde_A"], {"Kunde_A": 1}, [{"id": 1, "name": "X"}])
+    base = _mapping_signature(["Kunde_A"], {"Kunde_A": None}, [{"id": 1, "name": "X"}], set())
+    changed = _mapping_signature(["Kunde_A"], {"Kunde_A": 1}, [{"id": 1, "name": "X"}], set())
 
     assert base != changed
 
 
 def test_mapping_signature_is_stable_for_equivalent_input():
-    a = _mapping_signature(["Kunde_B", "Kunde_A"], {"Kunde_A": 1, "Kunde_B": None}, [{"id": 1, "name": "X"}])
-    b = _mapping_signature(["Kunde_A", "Kunde_B"], {"Kunde_B": None, "Kunde_A": 1}, [{"id": 1, "name": "X"}])
+    a = _mapping_signature(
+        ["Kunde_B", "Kunde_A"], {"Kunde_A": 1, "Kunde_B": None}, [{"id": 1, "name": "X"}], set()
+    )
+    b = _mapping_signature(
+        ["Kunde_A", "Kunde_B"], {"Kunde_B": None, "Kunde_A": 1}, [{"id": 1, "name": "X"}], set()
+    )
 
     assert a == b
+
+
+def test_mapping_signature_changes_when_ignored_projects_change():
+    base = _mapping_signature(["Kunde_A"], {"Kunde_A": 1}, [{"id": 1, "name": "X"}], set())
+    with_ignored = _mapping_signature(
+        ["Kunde_A"], {"Kunde_A": 1}, [{"id": 1, "name": "X"}], {"Kunde_A"}
+    )
+
+    assert base != with_ignored
 
 
 def test_quit_stops_timers_before_closing_the_store():

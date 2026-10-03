@@ -23,6 +23,10 @@ tick_seconds = 5
 input_grace_seconds = 30
 # So lange muss es still sein, bevor ein Segment geschlossen wird.
 idle_threshold_seconds = 300
+# Kurzer Projektwechsel (z. B. zum Grade-Kopieren) wird erst nach dieser
+# Zeit als echter Wechsel verbucht. Darunter wird dem alten Projekt
+# weiter zugerechnet.
+project_settle_seconds = 120
 # Projektnamen, die ignoriert werden, solange das Projekt noch keine Timeline
 # hat (z.B. die Resolve-Projektuebersicht). Ein echtes Projekt mit diesem
 # Namen wird getrackt, sobald es eine Timeline hat.
@@ -46,6 +50,7 @@ class Config:
     tick_seconds: float = 5.0
     input_grace_seconds: float = 30.0
     idle_threshold_seconds: float = 300.0
+    project_settle_seconds: float = 120.0
     merge_gap_seconds: float = 600.0
     auto_push: bool = True
     default_workspace_id: int | None = None
@@ -88,6 +93,9 @@ def load_config(path: Path | None = None) -> Config:
         ),
         idle_threshold_seconds=float(
             tracking.get("idle_threshold_seconds", defaults.idle_threshold_seconds)
+        ),
+        project_settle_seconds=float(
+            tracking.get("project_settle_seconds", defaults.project_settle_seconds)
         ),
         merge_gap_seconds=float(sync.get("merge_gap_seconds", defaults.merge_gap_seconds)),
         auto_push=bool(sync.get("auto_push", defaults.auto_push)),

@@ -136,3 +136,22 @@ def test_setting_meta_twice_overwrites(store):
     store.set_meta("toggl_workspace_id", "222")
 
     assert store.get_meta("toggl_workspace_id") == "222"
+
+
+def test_ignored_projects_start_empty(store):
+    assert store.ignored_projects() == set()
+
+
+def test_add_and_remove_ignored_project(store):
+    store.add_ignored_project("Kunde_A")
+    store.add_ignored_project("Kunde_B")
+    assert store.ignored_projects() == {"Kunde_A", "Kunde_B"}
+
+    store.remove_ignored_project("Kunde_A")
+    assert store.ignored_projects() == {"Kunde_B"}
+
+
+def test_add_ignored_project_is_idempotent(store):
+    store.add_ignored_project("Kunde_A")
+    store.add_ignored_project("Kunde_A")
+    assert store.ignored_projects() == {"Kunde_A"}

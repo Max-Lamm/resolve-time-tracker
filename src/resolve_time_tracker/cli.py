@@ -29,6 +29,7 @@ def build_runner(store: Store, config: cfg.Config) -> Runner:
         tracker=Tracker(
             input_grace_seconds=config.input_grace_seconds,
             idle_threshold_seconds=config.idle_threshold_seconds,
+            project_settle_seconds=config.project_settle_seconds,
         ),
         probe=ResolveProbe(ignored_projects=config.ignored_projects),
         clock=lambda: datetime.now(timezone.utc),

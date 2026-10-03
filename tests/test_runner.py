@@ -186,6 +186,31 @@ def test_status_reports_resolve_connected_without_a_project(setup):
     assert status.resolve_project_open is False
 
 
+def test_dynamic_ignore_hides_the_project_from_the_tracker(setup):
+    """Ein per Menubar ignoriertes Projekt soll aus Sicht des Trackers aussehen
+    wie 'kein Projekt offen' -- das offene Segment wird nach idle_threshold
+    natuerlich geschlossen, kein neues entsteht.
+    """
+    runner, store, probe, state = setup
+    runner.tick_once()
+    assert store.current_open_segment() is not None
+
+    store.add_ignored_project("Kunde_A")
+    state["now"] = START + timedelta(seconds=400)
+    state["frontmost"] = "com.apple.mail"
+    runner.tick_once()
+    state["now"] = START + timedelta(seconds=410)
+    runner.tick_once()
+
+    assert store.current_open_segment() is None
+    status = runner.status()
+    # Resolve selbst bleibt verbunden, aber "offenes Projekt" meldet der Status
+    # jetzt als false -- der Nutzer soll in der Menubar sehen, dass getrackt
+    # wird (bzw. nicht), ohne an die Ignore-Liste denken zu muessen.
+    assert status.resolve_connected is True
+    assert status.resolve_project_open is False
+
+
 def test_startup_closes_a_leftover_open_segment(tmp_path):
     """Nach einem Absturz darf das alte Segment nicht wiederbelebt werden."""
     path = tmp_path / "tracker.db"

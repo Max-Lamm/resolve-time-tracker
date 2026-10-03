@@ -31,12 +31,20 @@ class Tracker:
         self,
         input_grace_seconds: float = 30.0,
         idle_threshold_seconds: float = 300.0,
+        project_settle_seconds: float = 120.0,
     ) -> None:
         self.input_grace_seconds = input_grace_seconds
         self.idle_threshold_seconds = idle_threshold_seconds
+        # Ein Projektwechsel schlaegt erst nach dieser Zeit durch. Darunter wird
+        # das offene Segment des bisherigen Projekts weiter getouchet -- die
+        # Luecke beim Grade-Kopieren faellt dem alten Projekt zu, kein neues
+        # Segment entsteht fuer den Abstecher.
+        self.project_settle_seconds = project_settle_seconds
         self._state = TrackerState.NO_RESOLVE
         self._current_project: str | None = None
         self._last_active_at: datetime | None = None
+        self._pending_project: str | None = None
+        self._pending_since: datetime | None = None
 
     @property
     def state(self) -> TrackerState:
@@ -61,8 +69,47 @@ class Tracker:
 
         commands: list[Command] = []
         if self._state in _OPEN_STATES and self._current_project == project:
+            # Zurueck am Hauptprojekt (oder nie weg) -- evtl. laufendes Pending verwerfen.
+            self._pending_project = None
+            self._pending_since = None
             commands.append(TouchSegment(last_active_at=t.now, page=t.snapshot.page))
+            self._last_active_at = t.now
+        elif self._state in _OPEN_STATES and self._current_project is not None:
+            # Fremdes Projekt bei offenem Segment: Pending-Logik.
+            if self._pending_project != project:
+                self._pending_project = project
+                self._pending_since = t.now
+            assert self._pending_since is not None
+            pending_for = (t.now - self._pending_since).total_seconds()
+            if pending_for < self.project_settle_seconds:
+                # Besuch unter der Settle-Schwelle: still warten. Kein Command,
+                # _last_active_at bleibt stehen -- kommt der User zurueck zum
+                # Hauptprojekt, verlaengert der naechste normale Touch das alte
+                # Segment ganz von selbst (so "faellt der Besuch dem alten Projekt zu").
+                pass
+            else:
+                # Settle ueberschritten: echter Wechsel. Dem neuen Projekt wird
+                # die Besuchszeit ab pending_since rueckwirkend zugeschlagen,
+                # damit zwischen den Segmenten keine groessere Luecke klafft als
+                # noetig.
+                commands.extend(self._close_open_segment())
+                started_at = self._pending_since
+                commands.append(
+                    OpenSegment(
+                        project=project,
+                        database=t.snapshot.database_name,
+                        started_at=started_at,
+                        page=t.snapshot.page,
+                    )
+                )
+                self._current_project = project
+                self._pending_project = None
+                self._pending_since = None
+                self._last_active_at = t.now
         else:
+            # Kein offenes Segment -- Pending ist hier bedeutungslos.
+            self._pending_project = None
+            self._pending_since = None
             commands.extend(self._close_open_segment())
             commands.append(
                 OpenSegment(
@@ -73,29 +120,29 @@ class Tracker:
                 )
             )
             self._current_project = project
+            self._last_active_at = t.now
 
         self._state = TrackerState.ACTIVE
-        self._last_active_at = t.now
         return commands
 
     def _handle_inactive(self, t: Tick) -> list[Command]:
         resolve_gone = not t.snapshot.connected or t.snapshot.project_name is None
-        project_changed = (
-            t.snapshot.project_name is not None
-            and self._current_project is not None
-            and t.snapshot.project_name != self._current_project
-        )
 
         # Sofortige Abschluesse: hier gibt es nichts, worauf zu warten waere.
-        if self._state in _OPEN_STATES and (resolve_gone or project_changed or t.manual_pause):
+        # Ein reiner Projektwechsel waehrend Inaktivitaet schliesst nicht mehr
+        # sofort -- sonst wuerde die Settle-Logik umgangen, sobald der User
+        # beim Grade-Kopieren kurz wegklickt und so idle wird.
+        if self._state in _OPEN_STATES and (resolve_gone or t.manual_pause):
             commands = self._close_open_segment()
             if resolve_gone:
                 self._state = TrackerState.NO_RESOLVE
                 self._current_project = None
-            elif t.manual_pause:
-                self._state = TrackerState.PAUSED_MANUAL
+                self._pending_project = None
+                self._pending_since = None
             else:
-                self._state = TrackerState.PAUSED_IDLE
+                self._state = TrackerState.PAUSED_MANUAL
+                self._pending_project = None
+                self._pending_since = None
             return commands
 
         if self._state is TrackerState.ACTIVE:

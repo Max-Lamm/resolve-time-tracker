@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS meta (
 );
 """
 
+IGNORED_PROJECTS_META_KEY = "ignored_projects_dynamic"
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -223,6 +225,32 @@ class Store:
             " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+    def ignored_projects(self) -> set[str]:
+        """Dynamisch (aus der Menubar) ignorierte Resolve-Projekte.
+
+        Parallel zur statischen Liste in config.toml, die bleibt die Vorlage.
+        Dynamisch ignorierte Projekte werden on-the-fly vom Runner herausgefiltert,
+        bevor der Tracker den Snapshot sieht.
+        """
+        raw = self.get_meta(IGNORED_PROJECTS_META_KEY)
+        if raw is None:
+            return set()
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return set()
+        return {str(name) for name in data}
+
+    def add_ignored_project(self, name: str) -> None:
+        current = self.ignored_projects()
+        current.add(name)
+        self.set_meta(IGNORED_PROJECTS_META_KEY, json.dumps(sorted(current)))
+
+    def remove_ignored_project(self, name: str) -> None:
+        current = self.ignored_projects()
+        current.discard(name)
+        self.set_meta(IGNORED_PROJECTS_META_KEY, json.dumps(sorted(current)))
 
     def totals_since(self, since: datetime) -> dict[str, float]:
         totals: dict[str, float] = {}

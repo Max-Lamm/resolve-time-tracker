@@ -93,7 +93,10 @@ def _project_menu_entries(
 
 
 def _mapping_signature(
-    resolve_projects: list[str], mappings: dict[str, int | None], toggl_projects: list[dict]
+    resolve_projects: list[str],
+    mappings: dict[str, int | None],
+    toggl_projects: list[dict],
+    ignored_projects: set[str],
 ) -> tuple:
     """Fasst zusammen, wovon das Zuordnen-Untermenue abhaengt, um es nicht bei
 
@@ -104,6 +107,7 @@ def _mapping_signature(
         tuple(sorted(resolve_projects)),
         tuple(sorted(mappings.items())),
         tuple(sorted((p["id"], p["name"]) for p in toggl_projects)),
+        tuple(sorted(ignored_projects)),
     )
 
 
@@ -196,7 +200,10 @@ class TrackerApp(rumps.App):
         for project in resolve_projects:
             mapping = self._store.get_mapping(project)
             mapping_ids[project] = mapping.toggl_project_id if mapping else None
-        signature = _mapping_signature(resolve_projects, mapping_ids, self._toggl_projects)
+        ignored = self._store.ignored_projects()
+        signature = _mapping_signature(
+            resolve_projects, mapping_ids, self._toggl_projects, ignored
+        )
         if signature == self._mapping_signature:
             return
         self._mapping_signature = signature
@@ -205,11 +212,24 @@ class TrackerApp(rumps.App):
         self._map_item.add(
             rumps.MenuItem("Toggl-Projekte neu laden", callback=self._reload_toggl_projects)
         )
-        if not resolve_projects:
-            return
-        self._map_item.add(None)
-        for project in resolve_projects:
-            self._map_item.add(self._build_project_submenu(project, mapping_ids[project]))
+
+        active = [p for p in resolve_projects if p not in ignored]
+        if active:
+            self._map_item.add(None)
+            for project in active:
+                self._map_item.add(self._build_project_submenu(project, mapping_ids[project]))
+
+        if ignored:
+            self._map_item.add(None)
+            ignored_submenu = rumps.MenuItem("Ignorierte Projekte")
+            for project in sorted(ignored):
+                ignored_submenu.add(
+                    rumps.MenuItem(
+                        f"{project} – wieder tracken",
+                        callback=self._make_unignore_callback(project),
+                    )
+                )
+            self._map_item.add(ignored_submenu)
 
     def _build_project_submenu(self, resolve_project: str, selected_id: int | None) -> rumps.MenuItem:
         submenu = rumps.MenuItem(resolve_project)
@@ -223,6 +243,13 @@ class TrackerApp(rumps.App):
             rumps.MenuItem(
                 "Neues Toggl-Projekt anlegen…",
                 callback=self._make_create_callback(resolve_project),
+            )
+        )
+        submenu.add(None)
+        submenu.add(
+            rumps.MenuItem(
+                "Nicht mehr tracken",
+                callback=self._make_ignore_callback(resolve_project),
             )
         )
         return submenu
@@ -428,6 +455,24 @@ class TrackerApp(rumps.App):
                 log.exception("Workspace konnte nicht aufgeloest werden")
                 return
             self._store.set_mapping(resolve_project, workspace_id, toggl_project_id)
+            self._refresh()
+
+        return _callback
+
+    def _make_ignore_callback(self, resolve_project: str):
+        def _callback(_sender) -> None:
+            self._store.add_ignored_project(resolve_project)
+            # Signatur zuruecksetzen, damit das Menue beim naechsten Refresh
+            # neu aufgebaut wird (das Projekt wandert in "Ignorierte Projekte").
+            self._mapping_signature = None
+            self._refresh()
+
+        return _callback
+
+    def _make_unignore_callback(self, resolve_project: str):
+        def _callback(_sender) -> None:
+            self._store.remove_ignored_project(resolve_project)
+            self._mapping_signature = None
             self._refresh()
 
         return _callback

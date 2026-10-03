@@ -79,6 +79,14 @@ class Runner:
     def tick_once(self) -> None:
         frontmost = self._frontmost_source()
         snapshot = self._probe.poll()
+        # Dynamisch ignorierte Projekte (ueber die Menubar gesetzt) sehen fuer
+        # den Tracker aus wie "kein Projekt offen". So wird ein offenes Segment
+        # beim naechsten Tick natuerlich geschlossen (Projektwechsel-/
+        # resolve_gone-Zweig greift), ohne dass die Tracker-Logik etwas von der
+        # Ignore-Liste wissen muss.
+        if snapshot.project_name is not None:
+            if snapshot.project_name in self._store.ignored_projects():
+                snapshot = ResolveSnapshot(connected=snapshot.connected)
         self._last_snapshot = snapshot
         tick = Tick(
             now=self._clock(),
